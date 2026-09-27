@@ -19,6 +19,8 @@ jobs:
           persist-credentials: false
           submodules: recursive
       - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
       - run: forge fmt --check src test
       - run: forge build --sizes
       - run: forge test -vv
@@ -68,6 +70,8 @@ jobs:
           persist-credentials: false
           submodules: recursive
       - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
