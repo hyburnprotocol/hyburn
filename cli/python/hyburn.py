@@ -136,6 +136,9 @@ class Hyburn:
         b = self.w3.eth.get_block("latest")
         self._offset = b["timestamp"] - time.time()
         self.latest_block = b["number"]
+        dashboard = terminal_ui.current()
+        if dashboard:
+            dashboard.sync_chain(b["timestamp"], self.genesis, self.dur)
 
     def now(self) -> float:
         return time.time() + self._offset

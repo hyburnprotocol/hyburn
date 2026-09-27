@@ -74,6 +74,35 @@ class RpcRetryTests(unittest.TestCase):
             rpc.assert_not_called()
 
 class DisplayTests(unittest.TestCase):
+    def test_round_clock_uses_monotonic_time_and_waits_for_chain(self):
+        dashboard = console.terminal_ui.Dashboard(enabled=False)
+        with patch.object(console.time, 'monotonic', return_value=100), patch.object(console.Web3.HTTPProvider, 'make_request') as rpc:
+            dashboard.sync_chain(1500, 1000, 999)
+            self.assertIn('08:19', dashboard.countdown())
+            with patch.object(console.time, 'monotonic', return_value=110):
+                self.assertIn('08:09', dashboard.countdown())
+            with patch.object(console.time, 'monotonic', return_value=600):
+                self.assertEqual(dashboard.countdown(), 'Round 1: awaiting chain confirmation')
+            dashboard.sync_chain(999, 1000, 999)
+            self.assertIn('Next round 0', dashboard.countdown())
+            rpc.assert_not_called()
+
+    def test_color_preserves_layout_and_no_color_disables_it(self):
+        dashboard = console.terminal_ui.Dashboard(enabled=False)
+        dashboard.color = True
+        dashboard.log('RPC unavailable; retry in 30s')
+        colored = dashboard.styled_frame(80, 24)
+        self.assertIn('\x1b[33m', colored)
+        plain = dashboard.frame(80, 24)
+        self.assertEqual('\n'.join(console.terminal_ui.clean(line) for line in colored.splitlines()), plain)
+        self.assertTrue(all(len(line) <= 79 for line in plain.splitlines()))
+        output = io.StringIO()
+        output.isatty = lambda: True
+        with patch.object(console.sys, 'stdout', output), patch.object(console.sys, 'stderr', output), patch.dict(console.os.environ, {'NO_COLOR': '', 'TERM': 'xterm'}):
+            dashboard = console.terminal_ui.Dashboard()
+            self.assertFalse(dashboard.color)
+            self.assertNotIn('\x1b', dashboard.styled_frame(80, 24))
+
     def test_redirected_output_has_no_animation(self):
         output = io.StringIO()
         with patch.object(console.sys, 'stderr', output):

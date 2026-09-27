@@ -16,6 +16,10 @@ except ImportError:  # Non-POSIX terminals keep display + Ctrl-C support.
 
 _CURRENT = None
 
+# Terminal approximation of the supplied Hyperliquid Blob network mark.
+# Braille cells preserve the SVG silhouette without an image-capable terminal.
+NETWORK_MARK = (' ⣀⣀⡀    ⣠⣶⣿⣶⣦⡀', '⢸⣿⣿⣿⣷⠶⠶⣾⣿⣿⣿⣿⣿⡇', '⠈⠛⠛⠋    ⠙⠿⢿⠿⠟⠁')
+
 
 def current():
     return _CURRENT
@@ -63,6 +67,33 @@ class Dashboard:
         self.lock = threading.RLock()
         self.done = threading.Event()
         self.worker = None
+        self.chain_clock = None
+        self.color = self.enabled and 'NO_COLOR' not in os.environ
+        try:
+            ''.join(NETWORK_MARK).encode(getattr(self.output, 'encoding', None) or 'utf-8')
+            self.mark = NETWORK_MARK
+        except (UnicodeEncodeError, LookupError):
+            self.mark = ('              ', '  HyperEVM    ', '              ')
+
+    def sync_chain(self, timestamp, genesis, duration):
+        """Anchor the display to an existing RPC read; never fetch or send here."""
+        if duration <= 0:
+            return
+        with self.lock:
+            next_round = max(0, (int(timestamp) - genesis) // duration + 1)
+            target = genesis + next_round * duration
+            self.chain_clock = (time.monotonic(), max(0, target - timestamp), next_round)
+
+    def countdown(self):
+        if self.chain_clock is None:
+            return 'Round clock: waiting for chain sync'
+        anchor, remaining, rid = self.chain_clock
+        left = remaining - (time.monotonic() - anchor)
+        if left <= 0:
+            return f'Round {rid}: awaiting chain confirmation'
+        seconds = int(left + 0.999)
+        minutes, seconds = divmod(seconds, 60)
+        return f'Next round {rid} in ~{minutes:02}:{seconds:02} (local estimate)'
 
     def update(self, **fields):
         with self.lock:
@@ -121,11 +152,14 @@ class Dashboard:
             status = self.status() if callable(self.status) else self.status
             tabs = ['1 Overview', '2 Wallet / costs', '3 Events', '? Help']
             tabs[self.page] = '[' + tabs[self.page] + ']'
-            lines = [self.title, '  '.join(tabs)]
+            lines = [self.mark[0] + '  ' + self.title,
+                     self.mark[1] + '  ' + self.countdown(),
+                     self.mark[2] + '  HyperEVM / local display; no extra RPC requests',
+                     '  '.join(tabs)]
             lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
             space = max(3, height - len(lines) - 1)
             if self.page == 0:
-                left_keys = ['Phase', 'Mode', 'Chain', 'Round (last read)', 'Confirmed burns', 'Burns this run', 'Burn / transaction', 'Burn / round', 'Send window']
+                left_keys = ['Mode', 'Round (last read)', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Burns this run', 'Phase', 'Chain', 'Send window']
                 right_keys = ['Balance (snapshot)', 'Available incl. gas', 'Session burned', 'Session gas', 'Session spent', 'Burn budget', 'Burn spending']
                 def rows(keys):
                     result = []
@@ -160,6 +194,28 @@ class Dashboard:
             lines += ['1 Overview  2 Wallet  3 Events  ? Help  Tab Next  Ctrl-C Stop']
             return '\n'.join(line[:width] for line in lines[:height])
 
+    def styled_frame(self, width, height):
+        """Apply color after layout so ANSI escapes never affect column widths."""
+        frame = self.frame(width, height)
+        if not self.color:
+            return frame
+        lines = []
+        for index, line in enumerate(frame.splitlines()):
+            lower = line.lower()
+            code = '0'
+            if index < 3:
+                code = '1;36'  # Cyan network mark and clock; portable ANSI palette.
+            elif index == 3 or line.startswith('+'):
+                code = '36'
+            elif any(word in lower for word in ('failed', 'reverted', 'error:', 'stop:')):
+                code = '1;31'
+            elif any(word in lower for word in ('retry', 'unavailable', 'awaiting', 'cooling')):
+                code = '33'
+            elif any(word in lower for word in ('confirmed', 'verified:')):
+                code = '32'
+            lines.append(f'\x1b[{code}m{line}\x1b[0m')
+        return '\n'.join(lines)
+
     def render(self):
         while not self.done.is_set():
             if self.input_fd is not None and select.select([self.input_fd], [], [], 0)[0]:
@@ -170,7 +226,7 @@ class Dashboard:
                     for key in keys:
                         self.handle_key(key)
             size = shutil.get_terminal_size((80, 24))
-            self.output.write('\x1b[H' + self.frame(size.columns, size.lines).replace('\n', '\x1b[K\r\n') + '\x1b[K\x1b[J')
+            self.output.write('\x1b[H' + self.styled_frame(size.columns, size.lines).replace('\n', '\x1b[K\r\n') + '\x1b[K\x1b[J')
             self.output.flush()
             self.done.wait(0.25)
 

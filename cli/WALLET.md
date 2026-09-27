@@ -48,6 +48,34 @@ export HYBURN_KEYSTORE="$HOME/.hyburn/miner.keystore.json"
 
 ## Troubleshooting
 
+### What survives a restart?
+
+The public miners are not yet a fully resumable mining session manager. Their
+round-history cache is saved automatically under `~/.hyburn` (or `HYBURN_HOME`),
+keyed by chain, Miner and account. That cache avoids repeat history reads; it does
+not preserve your spending authorization or pending transaction journal.
+
+| State | Public miners (Python / Node / Go / Rust) |
+| --- | --- |
+| Encrypted wallet file | Kept on disk; unlock again on launch. |
+| RPC, contract, keystore path, burn settings | Supply via environment / arguments again in a new shell. |
+| Round history and claim cache | Saved and reused automatically. |
+| Burn budget used, burn count and last processed round | In memory only; reset on restart. |
+| Submitted transaction awaiting receipt | Check the transaction hash before restarting; automatic recovery is not implemented. |
+| Multiple processes for the same wallet | No session lock; run only one miner. |
+| Last round's reward after stopping | Run `claim` once that round ends. |
+
+During a running `mine` loop, timing and claiming older rounds with the next burn
+are automatic. Closing the process or sleeping the computer interrupts mining.
+A restart in the same round can burn again, and the same `--budget` authorizes a
+fresh burn budget. Do not treat restarting as resuming an unchanged spending cap.
+
+A fully resumable workflow needs persisted non-secret settings, an atomic session
+journal with cumulative budget usage, pending-receipt recovery before any new send,
+and a per-wallet process lock. These are not provided by the history cache or TUI.
+
+### Common issues
+
 | Symptom | What to check |
 | --- | --- |
 | `HYBURN_MINER is not set to a valid address` | Repeat the deployment exports from the quickstart in this terminal; use the Miner address, not the token address. |

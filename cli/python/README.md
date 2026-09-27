@@ -106,6 +106,17 @@ missed rounds during downtime are not backfilled.
 
 ## Terminal dashboard
 
+The header shows the next round's estimated start time, updated locally from the
+last chain timestamp using a monotonic clock. It stays visible during RPC work;
+at zero it waits for another chain read rather than treating local time as proof
+that the round started. Rendering adds no RPC calls and does not change signing
+or send timing. The activity panel separately shows the current operation.
+
+The HyperEVM network mark is a terminal approximation of the supplied Hyperliquid
+Blob SVG. UTF-8 terminals display the braille silhouette; other encodings fall
+back to text. Cyan identifies navigation, green confirmed events, yellow retries,
+and red errors. Set `NO_COLOR=1` for monochrome or use `--plain` for line logs.
+
 `hyburn.py mine` and `deploy_console.py` automatically show a fixed dashboard in
 interactive terminals at least 80 columns by 24 rows. It separates saved metrics,
 current activity/countdown and recent events. Press `1` for Overview, `2` for

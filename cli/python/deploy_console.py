@@ -472,6 +472,9 @@ class Console:
         claim_candidates = self.unclaimed_rounds(miner)
         while True:
             now = self.w3.eth.get_block('latest')['timestamp']
+            dashboard = terminal_ui.current()
+            if dashboard:
+                dashboard.sync_chain(now, genesis, 999)
             if now < genesis:
                 delay = max(1, genesis - now)
                 print(f'Genesis in {delay}s. Local wait; no background RPC polling.', flush=True)
@@ -493,6 +496,8 @@ class Console:
                 self.screen(f'ROUND {rid} CONFIRMED')
             # Synchronize once after submission; sleep locally until the next round.
             chain_now = self.w3.eth.get_block('latest')['timestamp']
+            if dashboard:
+                dashboard.sync_chain(chain_now, genesis, 999)
             target = genesis + (rid + 1) * 999
             delay = max(1, target - chain_now)
             print(f'Next burn: round {rid + 1}, about {delay}s. Sleeping locally; Ctrl-C to stop.', flush=True)
