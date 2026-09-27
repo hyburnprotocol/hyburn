@@ -204,15 +204,15 @@ func newHyburn(rpc, miner string, chainID int64, deployBlock int64) *Hyburn {
 		die("HYBURN_MINER is not set to a valid address")
 	}
 	h.minerAddr = common.HexToAddress(miner)
-	if chainID != 0 {
-		h.chainID = big.NewInt(chainID)
-	} else {
-		id, err := c.ChainID(h.ctx)
-		if err != nil {
-			die("cannot reach RPC " + rpc)
-		}
-		h.chainID = id
+	actualChain, err := c.ChainID(h.ctx)
+	if err != nil {
+		die("cannot reach RPC " + rpc)
 	}
+	if chainID != 0 && actualChain.Cmp(big.NewInt(chainID)) != 0 {
+		die(fmt.Sprintf("RPC chain ID mismatch: expected %d, got %s", chainID, actualChain))
+	}
+	h.chainID = actualChain
+
 	h.minerABI, _ = abi.JSON(strings.NewReader(minerABIJSON))
 	h.tokenABI, _ = abi.JSON(strings.NewReader(tokenABIJSON))
 	h.genesis = h.u256("genesisTimestamp").Int64()
@@ -259,7 +259,7 @@ func (h *Hyburn) loadKey() {
 	if ks := os.Getenv("HYBURN_KEYSTORE"); ks != "" {
 		raw, err := os.ReadFile(ks)
 		if err != nil {
-			die("keystore: " + err.Error())
+			die("Cannot unlock keystore; check the file and password.")
 		}
 		pw := os.Getenv("HYBURN_KEYSTORE_PASSWORD")
 		if pw == "" {
@@ -270,7 +270,7 @@ func (h *Hyburn) loadKey() {
 		}
 		k, err := keystore.DecryptKey(raw, pw)
 		if err != nil {
-			die("keystore: " + err.Error())
+			die("Cannot unlock keystore; check the file and password.")
 		}
 		h.key = k.PrivateKey
 	} else if pk := os.Getenv("HYBURN_PRIVATE_KEY"); pk != "" {

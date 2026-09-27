@@ -121,6 +121,19 @@ def main():
             env = {k: v for k, v in os.environ.items() if not k.startswith('HYBURN_')}
             env.update(HYBURN_HOME=home, HYBURN_RPC=f'http://127.0.0.1:{server.server_port}',
                        HYBURN_MINER=MINER, HYBURN_DEPLOY_BLOCK='10', HYBURN_CHAIN_ID='999')
+            wrong_chain = dict(env, HYBURN_CHAIN_ID='1')
+            rejected = subprocess.run(shlex.split(sys.argv[1]) + ['status'], env=wrong_chain,
+                                      cwd=ROOT, capture_output=True, text=True, timeout=30)
+            assert rejected.returncode != 0 and 'RPC chain ID mismatch' in rejected.stdout + rejected.stderr, rejected.stdout + rejected.stderr
+            print('ok   incorrect expected chain ID is rejected before signing')
+            for setting in [dict(HYBURN_PRIVATE_KEY='SECRET_SENTINEL'),
+                            dict(HYBURN_KEYSTORE=str(Path(home) / 'missing.json'), HYBURN_KEYSTORE_PASSWORD='test-password')]:
+                failed = subprocess.run(shlex.split(sys.argv[1]) + ['claim', '--dry-run'],
+                                        env=dict(env, **setting), cwd=ROOT, capture_output=True, text=True, timeout=30)
+                assert failed.returncode != 0 and 'SECRET_SENTINEL' not in failed.stdout + failed.stderr, failed.stdout + failed.stderr
+                assert ('private key' if 'HYBURN_PRIVATE_KEY' in setting else 'keystore') in (failed.stdout + failed.stderr).lower(), failed.stdout + failed.stderr
+            print('ok   invalid key and missing keystore errors are actionable and redact input')
+
             cache_path = Path(home) / f'999-{MINER}-{ACCOUNT}.json'
             command = shlex.split(sys.argv[1]) + ['history', '--account', ACCOUNT]
 

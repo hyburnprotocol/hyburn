@@ -110,7 +110,10 @@ class Hyburn:
         self.w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
         if not self.w3.is_connected():
             raise SystemExit(f"cannot reach RPC {rpc}")
-        self.chain_id = chain_id or self.w3.eth.chain_id
+        actual_chain = self.w3.eth.chain_id
+        if chain_id is not None and chain_id != actual_chain:
+            raise SystemExit(f"RPC chain ID mismatch: expected {chain_id}, got {actual_chain}")
+        self.chain_id = actual_chain
         if not Web3.is_address(miner):
             raise SystemExit("HYBURN_MINER is not set to a valid address")
         self.miner_addr = Web3.to_checksum_address(miner)
@@ -155,12 +158,18 @@ class Hyburn:
         ks = os.environ.get("HYBURN_KEYSTORE")
         pk = os.environ.get("HYBURN_PRIVATE_KEY")
         if ks:
-            dashboard = terminal_ui.current()
-            with dashboard.suspended() if dashboard else nullcontext():
-                pw = os.environ.get("HYBURN_KEYSTORE_PASSWORD") or getpass.getpass("keystore password: ")
-            self.account = Account.from_key(Account.decrypt(json.loads(Path(ks).read_text()), pw))
+            try:
+                dashboard = terminal_ui.current()
+                with dashboard.suspended() if dashboard else nullcontext():
+                    pw = os.environ.get("HYBURN_KEYSTORE_PASSWORD") or getpass.getpass("keystore password: ")
+                self.account = Account.from_key(Account.decrypt(json.loads(Path(ks).read_text()), pw))
+            except Exception:
+                raise SystemExit("Cannot unlock keystore; check the file and password.") from None
         elif pk:
-            self.account = Account.from_key(pk)
+            try:
+                self.account = Account.from_key(pk)
+            except Exception:
+                raise SystemExit("Invalid private key; use a 32-byte hex key, not a seed phrase.") from None
         else:
             raise SystemExit("no key: set HYBURN_KEYSTORE (encrypted JSON) or HYBURN_PRIVATE_KEY")
 

@@ -2,6 +2,8 @@
 
 **Burn HYPE. Mine HYBURN.**
 
+[Start mining](#mine-on-hyperevm) · [Website](https://hyburn.xyz) · [Wallet setup](cli/WALLET.md)
+
 Hyburn is a burn-to-mint protocol for HyperEVM. Every 999 seconds, participants share a round's scheduled HYBURN reward in proportion to the HYPE they burn. There is no premine, team allocation, administrator, upgrade path or pause function.
 
 ## How it works
@@ -30,6 +32,120 @@ Empty rounds issue nothing and do not advance the reward schedule. Integer round
 
 The [whitepaper source](web/src/app/whitepaper/page.tsx) describes the complete schedule, terminal remainder and trust assumptions.
 
+## Mine on HyperEVM
+
+Mining the existing deployment does **not** require Foundry, a contract deployment,
+or a website build. Start with Python below, or choose the [Node.js](cli/node/README.md),
+[Go](cli/go/README.md) or [Rust](cli/rust/README.md) guide.
+
+### 1. Install and inspect without a wallet
+
+These commands are for macOS/Linux Bash or Zsh (Windows users can use WSL).
+You need Git and Python 3.10+ with pip/venv support.
+
+```sh
+git clone https://github.com/hyburnprotocol/hyburn.git
+cd hyburn/cli/python
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+
+export HYBURN_RPC='https://rpc.hypurrscan.io'
+export HYBURN_CHAIN_ID=999
+export HYBURN_MINER='0x951258b9c1C625536c25A6ECe943aA75B0386250'
+export HYBURN_DEPLOY_BLOCK=47024793
+.venv/bin/python hyburn.py status
+```
+
+| Live deployment | Value |
+| --- | --- |
+| Network | HyperEVM mainnet, chain ID 999 |
+| Miner | [`0x951258b9c1C625536c25A6ECe943aA75B0386250`](https://hyperevmscan.io/address/0x951258b9c1C625536c25A6ECe943aA75B0386250) |
+| HYBURN token | [`0xC02E218F52ea5D38759BB1AfA92C197eF30673B4`](https://hyperevmscan.io/address/0xC02E218F52ea5D38759BB1AfA92C197eF30673B4) |
+| Deployment block | 47024793 |
+
+Use the **Miner** address for `HYBURN_MINER`, not the token address. Cross-check
+these addresses with [hyburn.xyz](https://hyburn.xyz). Explicit chain ID settings
+are checked against the RPC before key loading or signing.
+
+### 2. Set up a dedicated mining wallet
+
+There is no browser-wallet connection popup. The CLI signs locally with an
+Ethereum JSON keystore or an environment-supplied private key. An address alone
+can be used for read-only checks but cannot sign. Hardware-wallet signing and
+WalletConnect are not supported by these CLIs.
+
+Use a dedicated software-wallet account, such as a separate account in Rabby.
+To import that account's private key into an encrypted file, run this **offline** helper:
+
+```sh
+.venv/bin/python wallet_setup.py
+export HYBURN_KEYSTORE="$HOME/.hyburn/miner.keystore.json"
+```
+
+The helper asks for a private key and a new keystore password with hidden input.
+Do not enter a seed phrase. It prints the derived public address, creates an
+owner-only encrypted file, never overwrites a file and makes no network requests.
+Check that the printed address matches your chosen wallet account. Back up the
+file and password separately. This password is for the new keystore; it need not
+be your browser wallet's password.
+
+If you already have an encrypted Ethereum JSON keystore, skip the helper and set
+`HYBURN_KEYSTORE` to its absolute path. The same file works with all four miners.
+See the [wallet guide](cli/WALLET.md) for alternatives and troubleshooting.
+
+### 3. Fund, then preview
+
+Send only the amount you intend to use to the mining address **on HyperEVM**:
+native HYPE is needed for both burns and gas. HYPE held only on HyperCore, WHYPE,
+or HYBURN cannot pay this CLI's native HYPE transaction costs.
+
+```sh
+# Replace this with the PUBLIC address printed by the helper; no key needed.
+.venv/bin/python hyburn.py status --account YOUR_MINING_ADDRESS
+
+# Unlocks the keystore and estimates a burn, but does not send a transaction.
+.venv/bin/python hyburn.py burn 0.000999 --dry-run
+```
+
+A successful dry run is a simulation, not a reserved price or guaranteed inclusion.
+
+### 4. Start bounded mining
+
+The following command **spends real HYPE**. It sends at most two minimum burns
+(0.001998 HYPE total), with gas paid separately:
+
+```sh
+.venv/bin/python hyburn.py mine --amount 0.000999 --budget 0.001998 --rounds 2
+```
+
+The first send normally waits until 30 seconds before the current round ends;
+the countdown can initially be almost 999 seconds. A supported terminal opens a
+dashboard. Use `hyburn.py --plain mine ...` for plain logs. Keep the computer awake.
+Ctrl-C stops the process; a transaction already broadcast may still confirm.
+
+`--budget` counts **burns in this run only**, excludes gas and **resets on restart**.
+Restarting `mine` can burn again in the same round. Check `history` first and set
+a new budget deliberately. `--max-cost` is a condition at send time, not a final
+price guarantee. The [shared CLI reference](cli/README.md) explains all options.
+
+### 5. Claim the last reward
+
+Each successful burn also claims eligible earlier rounds. After the last round
+you participated in closes, claim its remaining reward:
+
+```sh
+.venv/bin/python hyburn.py claim
+.venv/bin/python hyburn.py history
+```
+
+Claiming also costs HYPE gas. Leave enough HYPE in the wallet for that transaction.
+Rewards go to the burner address; there is no claim deadline. To display HYBURN in
+a wallet, import the token address above with **9 decimals**.
+
+Exports apply only to the current terminal. In a new terminal, return to
+`hyburn/cli/python` and repeat the public deployment exports and `HYBURN_KEYSTORE`
+export; you do not need to clone, reinstall or import your key again.
+
 ## Repository
 
 | Path | Contents |
@@ -43,9 +159,9 @@ The [whitepaper source](web/src/app/whitepaper/page.tsx) describes the complete 
 | [`verify_bytecode.py`](verify_bytecode.py) | Miner runtime-code comparison |
 | [`brand/`](brand/) | Project avatar and banner assets |
 
-## Build the contracts
+## Build the contracts (developers)
 
-Install Foundry, clone this repository and run from its root:
+For contract development or bytecode verification, install Foundry, clone this repository and run from its root:
 
 ```sh
 git clone --recurse-submodules https://github.com/hyburnprotocol/hyburn.git
@@ -54,45 +170,6 @@ forge build
 ```
 
 Compiler settings are pinned in [`foundry.toml`](foundry.toml): Solidity 0.8.30, Cancun EVM, optimizer enabled with 1,000,000 runs, and no metadata hash. The production contracts have no external Solidity dependencies. Tests use forge-std, pinned as a Git submodule. If you cloned without submodules, run `git submodule update --init --recursive`.
-
-## Run a miner
-
-Choose one implementation; all expose `status`, `burn`, `mine`, `claim` and `history`:
-
-| Implementation | Setup and usage |
-| --- | --- |
-| Python (reference) | [Python guide](cli/python/README.md) |
-| Node.js | [Node.js guide](cli/node/README.md) |
-| Go | [Go guide](cli/go/README.md) |
-| Rust | [Rust guide](cli/rust/README.md) |
-
-For example, from the repository root, using Bash or Zsh with Python 3.10+:
-
-```sh
-cd cli/python
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-
-# Replace these placeholders with the published deployment facts.
-export HYBURN_MINER='<MINER_ADDRESS>'
-export HYBURN_DEPLOY_BLOCK='<DEPLOYMENT_BLOCK>'
-.venv/bin/python hyburn.py status
-
-# An existing encrypted Ethereum JSON keystore; its password is prompted.
-export HYBURN_KEYSTORE="$HOME/.hyburn/miner.json"
-
-# After genesis: estimate without sending. Requires a funded mining wallet.
-.venv/bin/python hyburn.py burn 0.000999 --dry-run
-
-# Sends up to two burns, with gas paid separately.
-.venv/bin/python hyburn.py mine --amount 0.000999 --budget 0.001998 --rounds 2
-
-# After the final round ends:
-.venv/bin/python hyburn.py claim
-.venv/bin/python hyburn.py history
-```
-
-Use a dedicated mining wallet. The CLI does not create a keystore. `--budget` counts only burns in the current process, excludes gas, and resets on restart. `--max-cost` checks the estimated cost at send time; it cannot guarantee the final round's cost. See the [shared CLI reference](cli/README.md) for all options and environment variables.
 
 ## Verify a deployment
 

@@ -9,7 +9,11 @@ Four implementations, one interface. Every implementation passes the same script
 | Go | `go/` | `cd go && go build -o hyburn . && ./hyburn …` |
 | Rust | `rust/` | `cd rust && cargo build --release && ./target/release/hyburn …` |
 
-## Interface (identical in all four)
+Start with the [mainnet quickstart](../README.md#mine-on-hyperevm) and
+[wallet guide](WALLET.md). No browser-wallet connection or contract deployment
+is needed for ordinary mining.
+
+## Interface (shared commands)
 
 ```text
 hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
@@ -19,6 +23,9 @@ hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
   claim   [--dry-run]
   history [--account ADDR]
 ```
+
+`--budget` counts burns in the current process, excludes gas, and resets on
+restart. A restart can burn again in the same round. Keep HYPE for the final claim.
 
 `--max-cost` is a condition at send time, not a guarantee of the final cost: burns by others after yours in the same round lower everyone's payout.
 

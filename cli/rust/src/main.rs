@@ -137,7 +137,9 @@ impl Hyburn {
     async fn new(rpc: &str, miner: &str, chain_id: Option<u64>, deploy_block: u64) -> Result<Self> {
         let miner_addr: Address = miner.parse().map_err(|_| eyre!("HYBURN_MINER is not set to a valid address"))?;
         let provider = ProviderBuilder::new().connect_http(rpc.parse()?);
-        let chain_id = match chain_id { Some(c) => c, None => provider.get_chain_id().await.map_err(|_| eyre!("cannot reach RPC {rpc}"))? };
+        let actual_chain = provider.get_chain_id().await.map_err(|_| eyre!("cannot reach RPC {rpc}"))?;
+        if chain_id.is_some_and(|expected| expected != actual_chain) { bail!("RPC chain ID mismatch: expected {}, got {actual_chain}", chain_id.unwrap()); }
+        let chain_id = actual_chain;
         let m = IHyburnMiner::new(miner_addr, provider.clone());
         let token = IToken::new(m.token().call().await?, provider.clone());
         let mut h = Self {
@@ -173,7 +175,7 @@ impl Hyburn {
     fn load_key(&mut self) -> Result<()> {
         let signer = if let Ok(ks) = std::env::var("HYBURN_KEYSTORE") {
             let pw = match std::env::var("HYBURN_KEYSTORE_PASSWORD") { Ok(p) => p, Err(_) => rpassword::prompt_password("keystore password: ")? };
-            LocalSigner::decrypt_keystore(ks, pw)?
+            LocalSigner::decrypt_keystore(ks, pw).map_err(|_| eyre!("Cannot unlock keystore; check the file and password."))?
         } else if let Ok(pk) = std::env::var("HYBURN_PRIVATE_KEY") {
             pk.parse::<PrivateKeySigner>().map_err(|_| eyre!("bad private key"))?
         } else {

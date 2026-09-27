@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { promptPassword } from "./password.mjs";
 import { Contract, JsonRpcProvider, Wallet, parseEther, isAddress, getAddress } from "ethers";
 
 const VERSION = "0.1.0";
@@ -89,6 +89,9 @@ class Hyburn {
     if (!isAddress(this.minerAddr)) die("HYBURN_MINER is not set to a valid address");
     this.provider = new JsonRpcProvider(this.rpc, this.chainIdOpt || undefined, this.chainIdOpt ? { staticNetwork: true } : {});
     try { this.chainId = Number((await this.provider.getNetwork()).chainId); } catch (e) { die(`cannot reach RPC ${this.rpc}`); }
+    const actualChain = Number(await this.provider.send("eth_chainId", []));
+    if (this.chainIdOpt && actualChain !== this.chainIdOpt) die(`RPC chain ID mismatch: expected ${this.chainIdOpt}, got ${actualChain}`);
+    this.chainId = actualChain;
     this.miner = new Contract(getAddress(this.minerAddr), MINER_ABI, this.provider);
     const m = this.miner;
     [this.genesis, this.dur, this.minBurn, this.initReward, this.halving, this.terminal, this.remainder] = (await Promise.all([
@@ -116,9 +119,13 @@ class Hyburn {
     const ks = process.env.HYBURN_KEYSTORE, pk = process.env.HYBURN_PRIVATE_KEY;
     let wallet;
     if (ks) {
-      const pw = process.env.HYBURN_KEYSTORE_PASSWORD ?? (await prompt("keystore password: "));
-      wallet = await Wallet.fromEncryptedJson(readFileSync(ks, "utf8"), pw);
-    } else if (pk) wallet = new Wallet(pk);
+      try {
+        const pw = process.env.HYBURN_KEYSTORE_PASSWORD ?? (await promptPassword("keystore password: "));
+        wallet = await Wallet.fromEncryptedJson(readFileSync(ks, "utf8"), pw);
+      } catch { die("Cannot unlock keystore; check the file, password and interactive terminal."); }
+    } else if (pk) {
+      try { wallet = new Wallet(pk); } catch { die("Invalid private key; use a 32-byte hex key, not a seed phrase."); }
+    }
     else die("no key: set HYBURN_KEYSTORE (encrypted JSON) or HYBURN_PRIVATE_KEY");
     this.account = wallet.connect(this.provider);
   }
@@ -205,10 +212,6 @@ class Hyburn {
     if (rc.status !== 1) die(`transaction reverted: ${tx.hash}`);
     return rc;
   }
-}
-
-function prompt(q) {
-  return new Promise((res) => { const rl = createInterface({ input: process.stdin, output: process.stderr }); rl.question(q, (a) => { rl.close(); res(a); }); });
 }
 
 async function cmdStatus(hb, o) {

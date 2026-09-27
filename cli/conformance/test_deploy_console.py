@@ -142,6 +142,20 @@ class DashboardTests(unittest.TestCase):
             self.assertIn('\x1b[?25h\x1b[?1049l', output.getvalue())
             rpc.assert_not_called()
 
+    def test_navigation_keeps_fields_and_spending_unchanged(self):
+        dashboard = console.terminal_ui.Dashboard(enabled=False)
+        dashboard.update(**{'Spending cap': '1 HYPE', 'Wallet': '0x123'})
+        for index in range(30):
+            dashboard.log(f'event {index}')
+        before = dict(dashboard.fields)
+        for key in ['2', 'j', 'k', '3', 'k', 'k', 'j', 'g', '?', '\t', '1']:
+            dashboard.handle_key(key)
+            frame = dashboard.frame(80, 24)
+            self.assertLessEqual(len(frame.splitlines()), 24)
+            self.assertTrue(all(len(line) <= 79 for line in frame.splitlines()))
+        self.assertEqual(dashboard.fields, before)
+        self.assertIn('MINING', dashboard.frame(80, 24))
+
     def test_plain_output_and_frame_sanitization(self):
         output = io.StringIO()
         with patch.object(console.sys, 'stdout', output), patch.object(console.sys, 'stderr', output):
@@ -153,6 +167,30 @@ class DashboardTests(unittest.TestCase):
         frame = dashboard.frame(80, 24)
         self.assertNotIn('\x1b', frame)
         self.assertTrue(all(len(line) <= 79 for line in frame.splitlines()))
+
+class WalletImportTests(unittest.TestCase):
+    def test_encrypted_round_trip_permissions_and_no_overwrite(self):
+        import wallet_setup
+        account = Account.create()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'miner.keystore.json'
+            password = 'local-test-password-only'
+            self.assertEqual(wallet_setup.write_keystore(target, account.key.hex(), password), account.address)
+            saved = target.read_bytes()
+            self.assertEqual(Account.from_key(Account.decrypt(json.loads(saved), password)).address, account.address)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+            with self.assertRaises(FileExistsError):
+                wallet_setup.write_keystore(target, account.key.hex(), password)
+            self.assertEqual(target.read_bytes(), saved)
+
+    def test_invalid_private_key_is_not_echoed(self):
+        import wallet_setup
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'miner.keystore.json'
+            with self.assertRaises(ValueError) as error:
+                wallet_setup.write_keystore(target, 'SECRET_SENTINEL', 'local-test-password-only')
+            self.assertNotIn('SECRET_SENTINEL', str(error.exception))
+            self.assertFalse(target.exists())
 
 class KeyTests(unittest.TestCase):
     def test_private_key_loading_address_check_and_permissions(self):

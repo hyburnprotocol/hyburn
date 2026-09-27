@@ -3,37 +3,34 @@
 The reference miner uses web3.py and the bundled `terminal_ui.py` display module.
 Read `hyburn.py` before trusting it with a key. Keep both Python files together.
 
-## Setup
+## First run
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-export HYBURN_MINER=0x...            # HyburnMiner address
-export HYBURN_DEPLOY_BLOCK=123456    # deployment block; history scans start here
-```
+Follow the [mainnet quickstart](../../README.md#mine-on-hyperevm), which includes
+installation, verified deployment addresses, offline keystore import, a read-only
+check, a dry run, bounded mining and the final claim. It does not require Foundry.
+For wallet alternatives and common errors, see [wallet setup](../WALLET.md).
 
-Key: either an encrypted keystore (password prompted) or, for unattended use on a machine you control, a raw key in the environment. Never pass a key as an argument.
+From `cli/python`, after the quickstart exports and wallet setup:
 
-```bash
-export HYBURN_KEYSTORE=~/.hyburn/miner.json
-# or
-export HYBURN_PRIVATE_KEY=0x...
-```
-
-Use a dedicated wallet that holds only the HYPE you intend to burn plus gas.
-
-## Commands
-
-```bash
+```sh
 .venv/bin/python hyburn.py status
-.venv/bin/python hyburn.py burn 0.5
-.venv/bin/python hyburn.py mine --amount 0.5 --max-cost 0.002 --at 30 --budget 50
+.venv/bin/python hyburn.py burn 0.000999 --dry-run
+# Real transactions: two minimum burns; gas is additional.
+.venv/bin/python hyburn.py mine --amount 0.000999 --budget 0.001998 --rounds 2
+# After the final participated round closes:
 .venv/bin/python hyburn.py claim
 .venv/bin/python hyburn.py history
 ```
 
-`mine` decides once per round, `--at` seconds before the round ends: if the HYPE cost per HYBURN at that moment, counting your own burn, is above `--max-cost` it skips the round; if `--budget` would be exceeded it stops. `--max-cost` is a condition at send time, not a guarantee: burns by others after yours in the same round lower everyone's payout, so the final cost can end up higher. Every burn names its round; if the transaction lands late the contract rejects it and nothing is burned. Unclaimed finished rounds are claimed in the same transaction as each burn. `--dry-run` prints what would be sent. Ctrl-C stops cleanly.
+`mine` decides once per round, 30 seconds before its end by default (`--at`).
+`--max-cost` is a send-time condition, not a guarantee: later burns can reduce
+payout. `--budget` counts this process's burns only, excludes gas and resets on
+restart. A restarted process can burn again in the same round. Keep the computer
+awake and leave HYPE for claim gas. Full options: [CLI reference](../README.md).
 
-Other settings: `HYBURN_RPC` (default `https://rpc.hypurrscan.io`), `HYBURN_CHAIN_ID`, `HYBURN_HOME` (cache directory, default `~/.hyburn`).
+Other settings: `HYBURN_RPC` (default `https://rpc.hypurrscan.io`),
+`HYBURN_CHAIN_ID`, `HYBURN_HOME` (cache directory, default `~/.hyburn`).
+
 ## Local deployment console
 
 `deploy_console.py` deploys and runs minimum-size burns from a dedicated local
@@ -111,7 +108,9 @@ missed rounds during downtime are not backfilled.
 
 `hyburn.py mine` and `deploy_console.py` automatically show a fixed dashboard in
 interactive terminals at least 80 columns by 24 rows. It separates saved metrics,
-current activity/countdown and recent events. Screen refreshes perform no RPC
+current activity/countdown and recent events. Press `1` for Overview, `2` for
+Wallet/Costs, `3` for Events, `?` for Help, or Tab to cycle. Use `j`/`k` to scroll
+and `g` to reset; these keys never send transactions or change budgets. Screen refreshes perform no RPC
 requests. Balances and round data are snapshots from the last read, not live feeds.
 
 Use `hyburn.py --plain mine ...` or `deploy_console.py --plain --execute` for the
