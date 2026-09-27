@@ -28,7 +28,7 @@ import (
 
 const (
 	version    = "0.1.0"
-	defaultRPC = "https://rpc.hyperliquid.xyz/evm"
+	defaultRPC = "https://rpc.hypurrscan.io"
 	logChunk   = 1000
 )
 

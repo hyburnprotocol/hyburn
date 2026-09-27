@@ -11,7 +11,8 @@ import subprocess
 import time
 import sys
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+import terminal_ui
 from decimal import Decimal
 from requests.exceptions import RequestException
 from web3 import Web3
@@ -28,6 +29,11 @@ UNIT = 10**18
 @contextmanager
 def activity(label):
     """TTY-only animation; the worker never performs RPC or reads signing data."""
+    dashboard = terminal_ui.current()
+    if dashboard:
+        with dashboard.activity(label):
+            yield
+        return
     done = threading.Event()
     def animate():
         started = time.monotonic()
@@ -127,7 +133,9 @@ def load_signer(expected, keystore_path=None, config_path=CONFIG_PATH):
             keystore = json.loads(Path(keystore_path).read_text())
             if '_TEMPLATE_ONLY' in keystore:
                 raise ValueError('template')
-            password = getpass.getpass('Keystore password (local terminal only): ')
+            dashboard = terminal_ui.current()
+            with dashboard.suspended() if dashboard else nullcontext():
+                password = getpass.getpass('Keystore password (local terminal only): ')
             account = Account.from_key(Account.decrypt(keystore, password))
             del password
         except Exception:
@@ -245,6 +253,30 @@ class Console:
 
     def screen(self, phase):
         balance = self.w3.eth.get_balance(self.address)
+        dashboard = terminal_ui.current()
+        if dashboard and self.state:
+            burned = len(self.state['rounds']) * MIN_BURN
+            remaining = max(0, self.state['cap'] - self.state['spent'])
+            dashboard.update(**{
+                'Phase': phase, 'Wallet': self.address,
+                'Miner': self.state.get('miner', 'not deployed'),
+                'Chain': self.args.chain_id,
+                'Balance (snapshot)': f'{hype(balance)} HYPE',
+                'Burn / transaction': f'{hype(MIN_BURN)} HYPE + gas',
+                'Confirmed burns': len(self.state['rounds']),
+                'Session burned': f'{hype(burned)} HYPE',
+                'Session gas': f"{hype(self.state['spent'] - burned)} HYPE",
+                'Session spent': f"{hype(self.state['spent'])} HYPE",
+                'Spending cap': f"{hype(self.state['cap'])} HYPE",
+                'Remaining cap': f'{hype(remaining)} HYPE',
+                'Protected reserve': f"{hype(self.state['reserve'])} HYPE",
+                'Available incl. gas': f"{hype(max(0, min(remaining, balance - self.state['reserve'])))} HYPE",
+            })
+            last = self.state.get('last_tx_cost')
+            if last:
+                print(f"Last tx: burn {hype(last['burn'])} + gas {hype(last['gas'])} HYPE")
+            print(f'{phase}. Snapshot updated; amounts rounded to 9 decimals, confirmed transactions only.')
+            return
         print(f'\nHYBURN / PRIVATE DEPLOY CONSOLE — {phase}', flush=True)
         print(f'Wallet  {self.address}\nChain   {self.args.chain_id}\nBalance {hype(balance)} HYPE', flush=True)
         if self.state:
@@ -432,7 +464,7 @@ class Console:
             print('Building local website preview; Vercel is not invoked.', flush=True)
             try:
                 subprocess.run(['npm', 'exec', '--', 'next', 'build', '--webpack'],
-                               cwd=ROOT / 'web', check=True, timeout=120)
+                               cwd=ROOT / 'web', check=True, timeout=120, capture_output=terminal_ui.current() is not None)
             except (subprocess.SubprocessError, OSError) as error:
                 print(f'Local website build did not finish: {error}. Facts saved; mining will continue.', flush=True)
         else:
@@ -474,12 +506,13 @@ def main():
         path = Path(value).expanduser()
         return str(path if path.is_absolute() else ROOT / path)
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--rpc', default=config.get('rpc', 'https://rpc.hyperliquid.xyz/evm'))
+    p.add_argument('--rpc', default=config.get('rpc', 'https://rpc.hypurrscan.io'))
     p.add_argument('--wallet', default=config.get('wallet', WALLET))
     p.add_argument('--chain-id', type=int, default=config.get('chain_id', 999))
     p.add_argument('--state', default=local_path(config.get('state_file', 'output/developer-deploy/session.json')))
     p.add_argument('--reserve', default=str(config.get('reserve_hype', '0.001')), help='HYPE left untouched; fixed on first execution')
     p.add_argument('--keystore', help='Optional encrypted keystore instead of private_key in local JSON')
+    p.add_argument('--plain', action='store_true', help='Disable the interactive terminal dashboard')
     p.add_argument('--execute', action='store_true')
     p.add_argument('--refresh-website', action='store_true', help='With --execute, refresh local website facts and build on resume; never publishes')
     args = p.parse_args()
@@ -489,7 +522,8 @@ def main():
     print('Checking local contract build...', flush=True)
     subprocess.run(['forge', 'build', '--quiet'], cwd=ROOT, check=True)
     try:
-        Console(args).run()
+        with terminal_ui.Dashboard(enabled=not args.plain, title='HYBURN / DEPLOY & MINE'):
+            Console(args).run()
     except KeyboardInterrupt:
         print('\nStopped. Pending transactions may still confirm; rerun with the same state file.')
     except Exception as error:

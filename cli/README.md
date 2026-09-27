@@ -22,6 +22,12 @@ hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
 
 `--max-cost` is a condition at send time, not a guarantee of the final cost: burns by others after yours in the same round lower everyone's payout.
 
+Default RPC in all four implementations: `https://rpc.hypurrscan.io` (third-party provider).
+Override with `--rpc` or `HYBURN_RPC`; existing explicit settings are unchanged.
+
+Python additionally provides a fixed terminal dashboard for `mine`; pass `--plain`
+before the command to disable it. Node, Go and Rust retain their countdown UI.
+
 Environment: `HYBURN_RPC`, `HYBURN_MINER`, `HYBURN_CHAIN_ID`, `HYBURN_DEPLOY_BLOCK`, `HYBURN_HOME` (cache, default `~/.hyburn`).
 Key: `HYBURN_KEYSTORE` (encrypted JSON; password prompted or `HYBURN_KEYSTORE_PASSWORD`) or `HYBURN_PRIVATE_KEY`. Never as an argument.
 

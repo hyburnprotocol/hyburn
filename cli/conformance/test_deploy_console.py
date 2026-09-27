@@ -4,6 +4,7 @@ import importlib.util
 import json
 import io
 import stat
+import sys
 from pathlib import Path
 import socket
 import subprocess
@@ -12,6 +13,8 @@ import time
 import unittest
 from unittest.mock import patch, MagicMock
 from eth_account import Account
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'cli/python'))
 
 spec = importlib.util.spec_from_file_location('console', Path(__file__).resolve().parents[2] / 'cli/python/deploy_console.py')
 console = importlib.util.module_from_spec(spec)
@@ -120,6 +123,36 @@ class ClaimJournalTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'reverted'):
                     c.settle()
                 self.assertEqual(c.state['claimed_rounds'], [0])
+
+class DashboardTests(unittest.TestCase):
+    def test_restores_terminal_on_exception_and_does_not_call_rpc(self):
+        output = io.StringIO()
+        output.isatty = lambda: True
+        with patch.dict(__import__('os').environ, {'TERM': 'xterm'}), \
+             patch.object(console.sys, 'stdout', output), patch.object(console.sys, 'stderr', output), \
+             patch.object(console.terminal_ui.shutil, 'get_terminal_size', return_value=__import__('os').terminal_size((100, 32))), \
+             patch.object(console.Web3.HTTPProvider, 'make_request') as rpc:
+            with self.assertRaises(KeyboardInterrupt):
+                with console.terminal_ui.Dashboard() as dashboard:
+                    dashboard.update(Balance='1 HYPE (snapshot)')
+                    print('Test event')
+                    raise KeyboardInterrupt
+            self.assertIs(console.sys.stdout, output)
+            self.assertIsNone(console.terminal_ui.current())
+            self.assertIn('\x1b[?25h\x1b[?1049l', output.getvalue())
+            rpc.assert_not_called()
+
+    def test_plain_output_and_frame_sanitization(self):
+        output = io.StringIO()
+        with patch.object(console.sys, 'stdout', output), patch.object(console.sys, 'stderr', output):
+            with console.terminal_ui.Dashboard() as dashboard:
+                self.assertFalse(dashboard.enabled)
+                print('plain log')
+            self.assertEqual(output.getvalue(), 'plain log\n')
+        dashboard.update(Status='unsafe\x1b[2Jtext')
+        frame = dashboard.frame(80, 24)
+        self.assertNotIn('\x1b', frame)
+        self.assertTrue(all(len(line) <= 79 for line in frame.splitlines()))
 
 class KeyTests(unittest.TestCase):
     def test_private_key_loading_address_check_and_permissions(self):

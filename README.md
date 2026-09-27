@@ -109,6 +109,11 @@ python3 verify_bytecode.py <MINER_ADDRESS> <RPC_URL>
 
 This script does not verify the Token or Vault runtime, prove their wiring, or perform a security audit. Check those contracts separately, including the token's `MINTER` address. Compiler settings must match the deployment.
 
+The Python `mine` command automatically opens a terminal dashboard on supported
+interactive terminals; use `--plain` before `mine` for line-by-line logs. All four
+miners default to `https://rpc.hypurrscan.io`. Set `HYBURN_RPC` or `--rpc` to use
+another provider. See [terminal behavior](cli/README.md#waiting-and-terminal-output).
+
 ## Build the website
 
 Requires Node.js 22 and npm:

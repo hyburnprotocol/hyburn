@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { Contract, JsonRpcProvider, Wallet, parseEther, isAddress, getAddress } from "ethers";
 
 const VERSION = "0.1.0";
-const DEFAULT_RPC = "https://rpc.hyperliquid.xyz/evm";
+const DEFAULT_RPC = "https://rpc.hypurrscan.io";
 const LOG_CHUNK = 1000;
 const ONE_HYPE = 10n ** 18n;
 const ONE_TOKEN = 10n ** 9n;

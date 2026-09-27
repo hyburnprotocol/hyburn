@@ -1,6 +1,7 @@
 # Hyburn miner (Python, reference implementation)
 
-One file, one dependency (web3.py). Read `hyburn.py` before trusting it with a key.
+The reference miner uses web3.py and the bundled `terminal_ui.py` display module.
+Read `hyburn.py` before trusting it with a key. Keep both Python files together.
 
 ## Setup
 
@@ -32,7 +33,7 @@ Use a dedicated wallet that holds only the HYPE you intend to burn plus gas.
 
 `mine` decides once per round, `--at` seconds before the round ends: if the HYPE cost per HYBURN at that moment, counting your own burn, is above `--max-cost` it skips the round; if `--budget` would be exceeded it stops. `--max-cost` is a condition at send time, not a guarantee: burns by others after yours in the same round lower everyone's payout, so the final cost can end up higher. Every burn names its round; if the transaction lands late the contract rejects it and nothing is burned. Unclaimed finished rounds are claimed in the same transaction as each burn. `--dry-run` prints what would be sent. Ctrl-C stops cleanly.
 
-Other settings: `HYBURN_RPC` (default `https://rpc.hyperliquid.xyz/evm`), `HYBURN_CHAIN_ID`, `HYBURN_HOME` (cache directory, default `~/.hyburn`).
+Other settings: `HYBURN_RPC` (default `https://rpc.hypurrscan.io`), `HYBURN_CHAIN_ID`, `HYBURN_HOME` (cache directory, default `~/.hyburn`).
 ## Local deployment console
 
 `deploy_console.py` deploys and runs minimum-size burns from a dedicated local
@@ -44,7 +45,7 @@ endpoint. From the repository root, create the ignored file
 {
   "wallet": "YOUR_EXPECTED_WALLET_ADDRESS",
   "private_key": "",
-  "rpc": "https://rpc.hyperliquid.xyz/evm",
+  "rpc": "https://rpc.hypurrscan.io",
   "chain_id": 999,
   "reserve_hype": "0.001",
   "state_file": "output/developer-deploy/session.json"
@@ -105,3 +106,21 @@ IP ([Hyperliquid documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/
 Other processes on the same IP share that limit. `invalid block height` alone
 does not establish that rate limiting caused an error. Keep the computer awake;
 missed rounds during downtime are not backfilled.
+
+## Terminal dashboard
+
+`hyburn.py mine` and `deploy_console.py` automatically show a fixed dashboard in
+interactive terminals at least 80 columns by 24 rows. It separates saved metrics,
+current activity/countdown and recent events. Screen refreshes perform no RPC
+requests. Balances and round data are snapshots from the last read, not live feeds.
+
+Use `hyburn.py --plain mine ...` or `deploy_console.py --plain --execute` for the
+original line-by-line output. Redirected output and smaller terminals fall back
+to plain logs. Ctrl-C restores the terminal; password prompts temporarily leave
+the dashboard. The public miner's budget counts burns only; the deployment
+console's saved cap includes deployment and transaction gas.
+
+The default RPC is the third-party Hypurrscan endpoint. `--rpc` overrides it;
+`HYBURN_RPC` also overrides it in the standard miner, while the deployment console
+uses its local JSON configuration. Existing explicit settings are preserved.
+Provider availability and limits may differ; the dashboard does not change them.

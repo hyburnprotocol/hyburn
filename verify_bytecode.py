@@ -16,7 +16,7 @@ def main():
     if len(sys.argv) < 2:
         raise SystemExit("usage: verify_bytecode.py <miner address> [rpc]  (run forge build first)")
     addr = sys.argv[1]
-    url = sys.argv[2] if len(sys.argv) > 2 else "https://rpc.hyperliquid.xyz/evm"
+    url = sys.argv[2] if len(sys.argv) > 2 else "https://rpc.hypurrscan.io"
     art = json.load(open(ART))
     local = bytearray(bytes.fromhex(art["deployedBytecode"]["object"][2:]))
     refs = art["deployedBytecode"].get("immutableReferences", {})

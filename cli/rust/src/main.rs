@@ -50,7 +50,7 @@ sol! {
     }
 }
 
-const DEFAULT_RPC: &str = "https://rpc.hyperliquid.xyz/evm";
+const DEFAULT_RPC: &str = "https://rpc.hypurrscan.io";
 const LOG_CHUNK: u64 = 1000;
 
 fn commas(s: &str) -> String {

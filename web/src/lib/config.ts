@@ -1,7 +1,7 @@
 export const CONFIG = {
   chainId: Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 999),
   chainName: process.env.NEXT_PUBLIC_CHAIN_NAME ?? "HyperEVM",
-  rpc: process.env.NEXT_PUBLIC_RPC ?? "https://rpc.hyperliquid.xyz/evm",
+  rpc: process.env.NEXT_PUBLIC_RPC ?? "https://rpc.hypurrscan.io",
   explorer: process.env.NEXT_PUBLIC_EXPLORER ?? "https://hyperevmscan.io",
   miner: process.env.NEXT_PUBLIC_MINER ?? "",
   token: process.env.NEXT_PUBLIC_TOKEN ?? "",

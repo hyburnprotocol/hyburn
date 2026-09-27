@@ -8,13 +8,15 @@ import sys
 import time
 from decimal import Decimal
 from pathlib import Path
+from contextlib import nullcontext
+import terminal_ui
 
 from eth_account import Account
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
 VERSION = "0.1.0"
-DEFAULT_RPC = "https://rpc.hyperliquid.xyz/evm"
+DEFAULT_RPC = "https://rpc.hypurrscan.io"
 DEFAULT_CHAIN_ID = 999
 LOG_CHUNK = 1000
 ONE_HYPE = 10**18
@@ -88,18 +90,20 @@ def wait_local(seconds, label, stop):
     deadline = time.monotonic() + max(0, seconds)
     recheck = time.monotonic() + min(30, max(0, seconds))
     tty = sys.stderr.isatty()
+    dashboard = terminal_ui.current()
+    display = dashboard.activity(lambda: f"{label} | ~{fmt_clock(deadline - time.monotonic())} | local countdown") if dashboard else nullcontext()
     try:
-        while not stop["flag"]:
-            left = deadline - time.monotonic()
-            if left <= 0 or time.monotonic() >= recheck:
-                break
-            if tty:
-                print(f"\r\033[2K{label} | ~{fmt_clock(left)} | Ctrl-C to stop", end="", file=sys.stderr, flush=True)
-            time.sleep(min(0.5, left))
+        with display:
+            while not stop["flag"]:
+                left = deadline - time.monotonic()
+                if left <= 0 or time.monotonic() >= recheck:
+                    break
+                if tty:
+                    print(f"\r\033[2K{label} | ~{fmt_clock(left)} | Ctrl-C to stop", end="", file=sys.stderr, flush=True)
+                time.sleep(min(0.5, left))
     finally:
         if tty:
             print("\r\033[2K", end="", file=sys.stderr, flush=True)
-
 
 class Hyburn:
     def __init__(self, rpc: str, miner: str, chain_id: int | None, deploy_block: int):
@@ -151,7 +155,9 @@ class Hyburn:
         ks = os.environ.get("HYBURN_KEYSTORE")
         pk = os.environ.get("HYBURN_PRIVATE_KEY")
         if ks:
-            pw = os.environ.get("HYBURN_KEYSTORE_PASSWORD") or getpass.getpass("keystore password: ")
+            dashboard = terminal_ui.current()
+            with dashboard.suspended() if dashboard else nullcontext():
+                pw = os.environ.get("HYBURN_KEYSTORE_PASSWORD") or getpass.getpass("keystore password: ")
             self.account = Account.from_key(Account.decrypt(json.loads(Path(ks).read_text()), pw))
         elif pk:
             self.account = Account.from_key(pk)
@@ -362,12 +368,21 @@ def cmd_mine(hb: Hyburn, args) -> None:
     log(f"mining as {hb.account.address}: {fmt_hype(amount)} HYPE per round, send {args.at}s before round end"
         + (f", max cost {fmt_hype(max_cost, 6)} HYPE/HYBURN" if max_cost else "")
         + (f", budget {fmt_hype(budget)} HYPE" if budget else "") + (", DRY RUN" if args.dry_run else ""))
+    dashboard = terminal_ui.current()
+    if dashboard:
+        dashboard.update(Wallet=hb.account.address, Miner=hb.miner_addr, Chain=hb.chain_id,
+                         **{'Burn / round': f'{fmt_hype(amount, 9)} HYPE + gas',
+                            'Burn budget': f'{fmt_hype(budget, 9)} HYPE (gas extra)' if budget is not None else 'Not set',
+                            'Mode': 'DRY RUN' if args.dry_run else 'LIVE',
+                            'Send window': f'{args.at}s before round end'})
     last_round = -1
     while not stop["flag"]:
         log("Synchronizing chain time and checking round...")
         hb.sync_time()
         t = hb.now()
         rid = hb.round_of(t)
+        if dashboard:
+            dashboard.update(**{'Round (last read)': rid, 'Block (last read)': hb.latest_block})
         if rid < 0:
             log(f"not started; round 0 opens in {fmt_clock(hb.genesis - t)}")
             wait_local(max(1, hb.genesis - t), "Waiting for genesis", stop)
@@ -395,6 +410,8 @@ def cmd_mine(hb: Hyburn, args) -> None:
             if do_burn(hb, amount, args.dry_run):
                 spent += amount
                 burns += 1
+                if dashboard:
+                    dashboard.update(**{'Burns this run': burns, 'Burn spending': f'{fmt_hype(spent, 9)} HYPE (gas extra)'})
                 if args.rounds and burns >= args.rounds:
                     log(f"done: {burns} round(s)")
                     break
@@ -405,6 +422,7 @@ def cmd_mine(hb: Hyburn, args) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="hyburn", description="Hyburn miner (reference implementation)")
+    p.add_argument("--plain", action="store_true", help="disable the interactive mining dashboard")
     p.add_argument("--rpc", default=os.environ.get("HYBURN_RPC", DEFAULT_RPC))
     p.add_argument("--miner", default=os.environ.get("HYBURN_MINER", ""), help="HyburnMiner contract address")
     p.add_argument("--chain-id", type=int, default=int(os.environ.get("HYBURN_CHAIN_ID", 0)) or None)
@@ -444,7 +462,8 @@ def main() -> None:
         hb.load_key()
     if args.cmd == "history" and not args.account and not hb.account:
         raise SystemExit("history needs --account or a key")
-    args.fn(hb, args)
+    with terminal_ui.Dashboard(enabled=args.cmd == "mine" and not args.plain):
+        args.fn(hb, args)
 
 if __name__ == "__main__":
     main()
