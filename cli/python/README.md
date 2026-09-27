@@ -33,3 +33,50 @@ Use a dedicated wallet that holds only the HYPE you intend to burn plus gas.
 `mine` decides once per round, `--at` seconds before the round ends: if the HYPE cost per HYBURN at that moment, counting your own burn, is above `--max-cost` it skips the round; if `--budget` would be exceeded it stops. `--max-cost` is a condition at send time, not a guarantee: burns by others after yours in the same round lower everyone's payout, so the final cost can end up higher. Every burn names its round; if the transaction lands late the contract rejects it and nothing is burned. Unclaimed finished rounds are claimed in the same transaction as each burn. `--dry-run` prints what would be sent. Ctrl-C stops cleanly.
 
 Other settings: `HYBURN_RPC` (default `https://rpc.hyperliquid.xyz/evm`), `HYBURN_CHAIN_ID`, `HYBURN_HOME` (cache directory, default `~/.hyburn`).
+## Local deployment console
+
+`deploy_console.py` deploys and runs minimum-size burns from a dedicated local
+wallet. It is separate from the standard `hyburn.py` miner and is never a web
+endpoint. From the repository root, create the ignored file
+`script/developer/deployment.local.json` with your settings:
+
+```json
+{
+  "wallet": "YOUR_EXPECTED_WALLET_ADDRESS",
+  "private_key": "",
+  "rpc": "https://rpc.hyperliquid.xyz/evm",
+  "chain_id": 999,
+  "reserve_hype": "0.001",
+  "state_file": "output/developer-deploy/session.json"
+}
+```
+
+Fill the private key locally, or use `--keystore /absolute/path/to/keystore.json`
+for an encrypted keystore. Raw keys in the JSON are plaintext; never commit or
+share this file. The console checks the derived address, Git exclusion and file
+permissions. A read-only preview requires no signing key:
+
+```sh
+cli/python/.venv/bin/python cli/python/deploy_console.py
+# Explicitly signs and sends, without an additional confirmation prompt:
+cli/python/.venv/bin/python cli/python/deploy_console.py --execute
+```
+
+The initial balance caps deployment, burns and gas for the whole saved session;
+later deposits do not raise the cap. Every burn is 0.000999 HYPE. The reserve stays
+untouched. The console verifies deployed code before mining, updates the local
+website deployment facts and builds it locally; it does not publish to Vercel.
+
+After a burn, it sleeps locally until the next round instead of polling every two
+seconds. It checks chain time again before sending. RPC calls are spaced at least
+1.25 seconds apart. Temporary read failures back off up to 60 seconds and keep
+retrying until recovery or Ctrl-C. Transaction submissions are never automatically
+replayed. Unresolved submissions and reverted transactions stop safely; inspect
+the saved hash before recovery. Resume using the same configuration and state
+file, never delete the journal or run another instance with a different journal.
+
+The official endpoint's documented limit is 100 EVM JSON-RPC requests/minute per
+IP ([Hyperliquid documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits)).
+Other processes on the same IP share that limit. `invalid block height` alone
+does not establish that rate limiting caused an error. Keep the computer awake;
+missed rounds during downtime are not backfilled.

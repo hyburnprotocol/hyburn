@@ -95,6 +95,9 @@ jobs:
       - if: matrix.lang == 'rust'
         run: cd cli/rust && cargo build --release --locked
       - run: forge build
+      - name: Deployment console regression (local Anvil only)
+        if: matrix.lang == 'python'
+        run: cli/python/.venv/bin/python cli/conformance/test_deploy_console.py
       - name: Cache boundary regression
         run: python3 cli/conformance/cache_boundary.py "${{ matrix.cmd }}"
       - name: Local-chain conformance
