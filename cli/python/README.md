@@ -84,7 +84,18 @@ clears the indicator and preserves the existing transaction journal.
 After a burn, it sleeps locally until the next round instead of polling every two
 seconds. It checks chain time again before sending. RPC calls are spaced at least
 1.25 seconds apart. Temporary read failures back off up to 60 seconds and keep
-retrying until recovery or Ctrl-C. Transaction submissions are never automatically
+retrying until recovery or Ctrl-C. Rate-limit responses instead wait 30 seconds,
+then 60 seconds for further limits, even if another read succeeded in between.
+Requests slow to at least four seconds apart for five minutes after that cooldown.
+The endpoint's limit is shared across the IP; staying below it in one console
+does not guarantee availability.
+
+Confirmed claims are persisted in the session journal and skipped on restart.
+Old sessions need one migration scan; each confirmed result is saved immediately
+so interrupting the scan does not discard its progress. Newly confirmed
+`burnAndClaim` transactions record their claims from the successful receipt.
+
+Transaction submissions are never automatically
 replayed. Unresolved submissions and reverted transactions stop safely; inspect
 the saved hash before recovery. Resume using the same configuration and state
 file, never delete the journal or run another instance with a different journal.

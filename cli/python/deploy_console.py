@@ -64,26 +64,38 @@ class ResilientHTTPProvider(Web3.HTTPProvider):
     def make_request(self, method, params):
         attempt = 0
         while True:
+            limited = False
             try:
                 with activity(f'RPC {method} (rate-limited)'):
                     remaining = getattr(self, '_next_request', 0) - time.monotonic()
                     if remaining > 0:
                         time.sleep(remaining)
-                    self._next_request = time.monotonic() + self.MIN_INTERVAL
+                    interval = max(self.MIN_INTERVAL, 4 if time.monotonic() < getattr(self, '_rate_until', 0) else 0)
+                    self._next_request = time.monotonic() + interval
                     reply = super().make_request(method, params)
             except RequestException as error:
                 status = getattr(getattr(error, 'response', None), 'status_code', None)
                 if method not in self.SAFE or (status is not None and status != 429 and status < 500):
                     raise
+                limited = status == 429
             else:
                 message = str(reply.get('error', {}).get('message', '')).lower()
-                temporary = any(word in message for word in ('invalid block height', 'rate limit', 'too many requests', 'temporarily unavailable', 'timeout', 'timed out'))
+                limited = reply.get('error', {}).get('code') == -32005 or any(word in message for word in ('rate limit', 'too many requests'))
+                temporary = limited or any(word in message for word in ('invalid block height', 'rate limit', 'too many requests', 'temporarily unavailable', 'timeout', 'timed out'))
                 if method not in self.SAFE or not temporary:
                     return reply
             # Read failures never trigger a send or a process restart. Ctrl-C still works.
-            delay = min(2 ** min(attempt, 6), 60)
+            if limited:
+                now = time.monotonic()
+                strikes = getattr(self, '_rate_strikes', 0) if now < getattr(self, '_rate_until', 0) else 0
+                delay = 30 if strikes == 0 else 60
+                self._rate_strikes = strikes + 1
+                self._rate_until = now + delay + 300
+                print(f'RPC rate limit ({method}); cooling down {delay}s. Slowing requests to 4s apart for at least 5 minutes.', flush=True)
+            else:
+                delay = min(2 ** min(attempt, 6), 60)
+                print(f'RPC read unavailable ({method}); waiting {delay}s before retry {attempt + 1}. No transaction resent.', flush=True)
             attempt += 1
-            print(f'RPC read unavailable; waiting {delay}s before retry {attempt}. No transaction resent.', flush=True)
             wait_locally(delay, 'RPC retry; no transaction resent')
 
 
@@ -293,6 +305,9 @@ class Console:
                 self.state['deploy_tx'] = pending['hash']
             elif pending['kind'] == 'burn':
                 self.state['rounds'].append(pending['round'])
+                known = set(self.state.get('claimed_rounds', []))
+                known.update(pending.get('claims', []))
+                self.state['claimed_rounds'] = sorted(known)
         self.state['pending'] = None
         if receipt['status'] != 1:
             self.state['halted'] = 'Transaction reverted; inspect before starting another session'
@@ -300,7 +315,7 @@ class Console:
         if self.state.get('halted'):
             raise RuntimeError(self.state['halted'])
 
-    def send(self, fn, kind, value=0, rid=None):
+    def send(self, fn, kind, value=0, rid=None, claims=None):
         try:
             tx = self.prepare(fn, value)
         except ContractLogicError:
@@ -323,7 +338,7 @@ class Console:
         signed = self.account.sign_transaction(tx)
         tx_hash = Web3.to_hex(signed.hash)
         # Persist before broadcasting: even a timeout/crash cannot silently repeat a burn.
-        self.state['pending'] = dict(hash=tx_hash, kind=kind, value=value, round=rid)
+        self.state['pending'] = dict(hash=tx_hash, kind=kind, value=value, round=rid, claims=list(claims or []))
         self.save()
         print(f'Sending {kind}: {tx_hash}', flush=True)
         self.w3.eth.send_raw_transaction(signed.raw_transaction)
@@ -358,6 +373,22 @@ class Console:
             raise RuntimeError('Genesis or mining constants mismatch')
         print('VERIFIED: Miner / Token / Vault runtime, immutables, deployment and genesis.', flush=True)
         return genesis, token_address, vault_address
+
+    def unclaimed_rounds(self, miner):
+        # Migrate old journals lazily; each confirmed claim survives interrupted scans.
+        known = set(self.state.get('claimed_rounds', []))
+        candidates = [r for r in self.state['rounds'] if r not in known]
+        print(f'Checking {len(candidates)} uncached/unclaimed rounds; {len(known)} confirmed claims skipped.', flush=True)
+        unclaimed = []
+        for index, rid in enumerate(candidates, 1):
+            print(f'Claim check {index}/{len(candidates)}: round {rid}', flush=True)
+            if miner.functions.claimed(rid, self.address).call():
+                known.add(rid)
+                self.state['claimed_rounds'] = sorted(known)
+                self.save()
+            else:
+                unclaimed.append(rid)
+        return unclaimed
 
     def run(self):
         self.screen('READ-ONLY PREVIEW' if not self.args.execute else 'PREPARING')
@@ -406,10 +437,7 @@ class Console:
                 print(f'Local website build did not finish: {error}. Facts saved; mining will continue.', flush=True)
         else:
             print('Resuming mining; local website update/build skipped.', flush=True)
-        print('Checking previously unclaimed rewards; RPC reads are rate-limited.', flush=True)
-        # Finished claims are immutable. Keep only unfinished claims in the active set.
-        claim_candidates = [r for r in self.state['rounds']
-                            if not miner.functions.claimed(r, self.address).call()]
+        claim_candidates = self.unclaimed_rounds(miner)
         while True:
             now = self.w3.eth.get_block('latest')['timestamp']
             if now < genesis:
@@ -423,7 +451,7 @@ class Console:
                     print('Mining schedule complete.')
                     return
                 claims = [r for r in claim_candidates if r < rid]
-                sent = self.send(miner.functions.burnAndClaim(rid, claims), 'burn', MIN_BURN, rid)
+                sent = self.send(miner.functions.burnAndClaim(rid, claims), 'burn', MIN_BURN, rid, claims)
                 if sent is None:
                     continue
                 if not sent:

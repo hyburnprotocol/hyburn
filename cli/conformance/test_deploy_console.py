@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from eth_account import Account
 
 spec = importlib.util.spec_from_file_location('console', Path(__file__).resolve().parents[2] / 'cli/python/deploy_console.py')
@@ -29,6 +29,19 @@ class RpcRetryTests(unittest.TestCase):
             self.assertEqual(self.provider().make_request('eth_getBlockByNumber', ['latest', False]), ok)
             self.assertEqual(call.call_count, 11)
             self.assertEqual(max(c.args[0] for c in wait.call_args_list), 60)
+
+    def test_rate_limit_cooldown_survives_successful_requests(self):
+        error = {'error': {'code': -32005, 'message': 'rate limited'}}
+        ok = {'result': '0x3e7'}
+        provider = self.provider()
+        with patch.object(console.Web3.HTTPProvider, 'make_request', side_effect=[error, ok, error, ok]), \
+             patch.object(console, 'wait_locally') as wait, \
+             patch.object(console.time, 'monotonic', return_value=100), \
+             patch.object(console.time, 'sleep') as sleep:
+            provider.make_request('eth_chainId', [])
+            provider.make_request('eth_chainId', [])
+            self.assertEqual([c.args[0] for c in wait.call_args_list], [30, 60])
+            self.assertTrue(all(c.args[0] == 4 for c in sleep.call_args_list))
 
     def test_submission_is_never_replayed(self):
         error = {'error': {'code': -32603, 'message': 'invalid block height: 1'}}
@@ -75,6 +88,38 @@ class DisplayTests(unittest.TestCase):
                     raise KeyboardInterrupt
             self.assertTrue(output.getvalue().endswith('\r\033[2K'))
             rpc.assert_not_called()
+
+class ClaimJournalTests(unittest.TestCase):
+    def console(self):
+        c = console.Console.__new__(console.Console)
+        c.address = 'test-account'
+        c.state = dict(rounds=[0, 1, 2], claimed_rounds=[0], spent=0)
+        c.save = MagicMock()
+        return c
+
+    def test_confirmed_claims_are_never_read_again(self):
+        c = self.console()
+        miner = MagicMock()
+        miner.functions.claimed.return_value.call.side_effect = [True, False, False]
+        self.assertEqual(c.unclaimed_rounds(miner), [2])
+        self.assertEqual(c.state['claimed_rounds'], [0, 1])
+        self.assertEqual(c.unclaimed_rounds(miner), [2])
+        self.assertEqual([call.args[0] for call in miner.functions.claimed.call_args_list], [1, 2, 2])
+        c.save.assert_called_once()
+
+    def test_successful_receipt_records_claims_but_revert_does_not(self):
+        for status in (1, 0):
+            c = self.console()
+            c.state['pending'] = dict(hash='test-hash', kind='burn', value=console.MIN_BURN, round=3, claims=[1, 2])
+            c.w3 = MagicMock()
+            c.w3.eth.get_transaction_receipt.return_value = dict(status=status, gasUsed=100, effectiveGasPrice=2)
+            if status:
+                c.settle()
+                self.assertEqual(c.state['claimed_rounds'], [0, 1, 2])
+            else:
+                with self.assertRaisesRegex(RuntimeError, 'reverted'):
+                    c.settle()
+                self.assertEqual(c.state['claimed_rounds'], [0])
 
 class KeyTests(unittest.TestCase):
     def test_private_key_loading_address_check_and_permissions(self):
