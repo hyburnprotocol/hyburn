@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,8 @@ class Fixture:
         self.ended = False
         self.claimed = False
         self.reads = []
+        self.waiting = False
+        self.block_reads = 0
 
     def handle(self, method, params):
         number = 11 if self.ended else 10
@@ -42,8 +45,9 @@ class Fixture:
         if method == 'eth_blockNumber':
             return hex(number)
         if method == 'eth_getBlockByNumber':
+            self.block_reads += 1
             return dict(
-                number=hex(number), timestamp=hex(GENESIS + (999 if self.ended else 998)),
+                number=hex(number), timestamp=hex(GENESIS + (10 if self.waiting else (999 if self.ended else 998))),
                 hash='0x' + 'ab' * 32, parentHash='0x' + 'cd' * 32,
                 nonce='0x0000000000000000', sha3Uncles='0x' + '00' * 32,
                 logsBloom='0x' + '00' * 256, transactionsRoot='0x' + '00' * 32,
@@ -154,6 +158,33 @@ def main():
             entry, _ = run()
             assert int(entry['total']) == 2 * UNIT and len(fixture.reads) == 3, (entry, fixture.reads)
             print('ok   old potentially incorrect v2 cache is rebuilt')
+
+            # A waiting miner must stay responsive without polling once a second.
+            fixture.waiting = True
+            env['HYBURN_PRIVATE_KEY'] = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+            log_path = Path(home) / 'waiting.log'
+            with log_path.open('w') as output:
+                proc = subprocess.Popen(shlex.split(sys.argv[1]) + ['mine', '--amount', '0.001', '--dry-run'],
+                                        env=env, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
+                try:
+                    deadline = time.monotonic() + 15
+                    while 'local wait' not in log_path.read_text():
+                        assert proc.poll() is None, log_path.read_text()
+                        assert time.monotonic() < deadline, log_path.read_text()
+                        time.sleep(0.1)
+                    reads = fixture.block_reads
+                    time.sleep(3)
+                    assert fixture.block_reads == reads, 'RPC polling continued during local wait'
+                    proc.send_signal(signal.SIGINT)
+                    assert proc.wait(timeout=5) == 0, log_path.read_text()
+                    text = log_path.read_text()
+                    assert 'mining stopped' in text and '\x1b' not in text, text
+                    print('ok   local countdown makes no RPC requests, logs stay plain, Ctrl-C exits')
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait(timeout=5)
+
         finally:
             server.shutdown()
             server.server_close()

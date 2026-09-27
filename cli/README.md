@@ -27,6 +27,21 @@ Key: `HYBURN_KEYSTORE` (encrypted JSON; password prompted or `HYBURN_KEYSTORE_PA
 
 Use a dedicated wallet holding only the HYPE you intend to burn plus gas. Burned HYPE does not come back.
 
+## Waiting and terminal output
+
+All four `mine` implementations display an estimated countdown in interactive
+terminals. They wait locally and re-check chain time at most every 30 seconds
+during long waits, and again at the send window. The display itself makes no RPC
+requests. Ctrl-C interrupts the wait; redirected output uses plain log lines.
+An estimated countdown is not a guarantee of transaction inclusion.
+
+The Python deployment console is for deploying **your own protocol instance**.
+To mine an existing deployment, use the standard `hyburn` commands above with its
+Miner address and deployment block. No website build or Foundry installation is
+needed for ordinary mining. The deployment console has a separate RPC throttle
+(1.25 seconds between requests); do not assume that throttle applies to the other
+miners or to other applications sharing your IP.
+
 ## Shared regression tests
 
 From the repository root, build the contracts and install/build the selected miner:

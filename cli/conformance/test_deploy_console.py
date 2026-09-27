@@ -2,6 +2,7 @@
 import argparse
 import importlib.util
 import json
+import io
 import stat
 from pathlib import Path
 import socket
@@ -54,6 +55,25 @@ class RpcRetryTests(unittest.TestCase):
         with patch.object(console.time, 'monotonic', side_effect=[0, 0, 60, 120, 125]), patch.object(console.time, 'sleep') as sleep, patch.object(console.Web3.HTTPProvider, 'make_request') as rpc:
             console.wait_locally(125)
             self.assertEqual([c.args[0] for c in sleep.call_args_list], [60, 60, 5])
+            rpc.assert_not_called()
+
+class DisplayTests(unittest.TestCase):
+    def test_redirected_output_has_no_animation(self):
+        output = io.StringIO()
+        with patch.object(console.sys, 'stderr', output):
+            with console.activity('RPC eth_call'):
+                pass
+        self.assertEqual(output.getvalue(), '')
+
+    def test_interrupt_cleans_up_animation_without_rpc(self):
+        output = io.StringIO()
+        output.isatty = lambda: True
+        with patch.object(console.sys, 'stderr', output), \
+             patch.object(console.Web3.HTTPProvider, 'make_request') as rpc:
+            with self.assertRaises(KeyboardInterrupt):
+                with console.activity('Waiting locally'):
+                    raise KeyboardInterrupt
+            self.assertTrue(output.getvalue().endswith('\r\033[2K'))
             rpc.assert_not_called()
 
 class KeyTests(unittest.TestCase):
@@ -135,6 +155,9 @@ class ChainTest(unittest.TestCase):
                 self.assertTrue(c.send(miner.functions.burnAndClaim(0, []), 'burn', console.MIN_BURN, 0))
                 self.assertEqual(miner.functions.burned(0, account.address).call(), console.MIN_BURN)
                 self.assertEqual(c.state['rounds'], [0])
+                self.assertEqual(c.state['last_tx_cost']['burn'], console.MIN_BURN)
+                receipt = c.w3.eth.get_transaction_receipt(c.w3.eth.get_block('latest')['transactions'][0])
+                self.assertEqual(c.state['last_tx_cost']['gas'], receipt['gasUsed'] * receipt['effectiveGasPrice'])
                 original_spent = c.state['spent']
                 # Exercise the actual execution orchestration on a second local deployment.
                 args2 = argparse.Namespace(**vars(args))
@@ -145,7 +168,7 @@ class ChainTest(unittest.TestCase):
                 auto = console.Console(args2)
                 target = Path(temp) / 'website.env'
                 write_env = console.update_website
-                def advance(_):
+                def advance(_, *labels):
                     if auto.state['rounds']:
                         raise StopIteration('first automatic burn verified')
                     auto.w3.provider.make_request('evm_setNextBlockTimestamp', [auto.state['genesis']])
@@ -160,6 +183,16 @@ class ChainTest(unittest.TestCase):
                     self.assertIn('NEXT_PUBLIC_MINER=' + auto.state['miner'], target.read_text())
                     self.assertEqual(auto.state['rounds'], [0])
                     self.assertTrue(any(call.args[0][:2] == ['npm', 'exec'] for call in build.call_args_list))
+                # A resumed miner must not write/build the website.
+                with patch.object(console, 'ensure_config_untracked'), \
+                     patch.object(console, 'load_signer', return_value=account), \
+                     patch.object(console, 'update_website') as website, \
+                     patch.object(console.subprocess, 'run') as build, \
+                     patch.object(console, 'wait_locally', side_effect=StopIteration('resumed')):
+                    with self.assertRaisesRegex(StopIteration, 'resumed'):
+                        auto.run()
+                    website.assert_not_called()
+                    build.assert_not_called()
                 auto.lock.close()
 
                 c.lock.close()

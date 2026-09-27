@@ -9,6 +9,9 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import sys
+import threading
+from contextlib import contextmanager
 from decimal import Decimal
 from requests.exceptions import RequestException
 from web3 import Web3
@@ -20,6 +23,33 @@ WALLET = ''  # Set an expected wallet in the ignored local configuration.
 CONFIG_PATH = ROOT / 'script/developer/deployment.local.json'
 MIN_BURN = 999_000_000_000_000
 UNIT = 10**18
+
+
+@contextmanager
+def activity(label):
+    """TTY-only animation; the worker never performs RPC or reads signing data."""
+    done = threading.Event()
+    def animate():
+        started = time.monotonic()
+        i = 0
+        while not done.is_set():
+            text = label() if callable(label) else f'{label} | {int(time.monotonic() - started)}s'
+            sys.stderr.write(f'\r\033[2K{"|/-"[i % 3]} {text}')
+            sys.stderr.flush()
+            i += 1
+            done.wait(0.2)
+    worker = None
+    if sys.stderr.isatty():
+        worker = threading.Thread(target=animate, daemon=True)
+        worker.start()
+    try:
+        yield
+    finally:
+        done.set()
+        if worker:
+            worker.join()
+            sys.stderr.write('\r\033[2K')
+            sys.stderr.flush()
 
 
 class ResilientHTTPProvider(Web3.HTTPProvider):
@@ -34,12 +64,13 @@ class ResilientHTTPProvider(Web3.HTTPProvider):
     def make_request(self, method, params):
         attempt = 0
         while True:
-            remaining = getattr(self, '_next_request', 0) - time.monotonic()
-            if remaining > 0:
-                time.sleep(remaining)
-            self._next_request = time.monotonic() + self.MIN_INTERVAL
             try:
-                reply = super().make_request(method, params)
+                with activity(f'RPC {method} (rate-limited)'):
+                    remaining = getattr(self, '_next_request', 0) - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(remaining)
+                    self._next_request = time.monotonic() + self.MIN_INTERVAL
+                    reply = super().make_request(method, params)
             except RequestException as error:
                 status = getattr(getattr(error, 'response', None), 'status_code', None)
                 if method not in self.SAFE or (status is not None and status != 429 and status < 500):
@@ -53,18 +84,18 @@ class ResilientHTTPProvider(Web3.HTTPProvider):
             delay = min(2 ** min(attempt, 6), 60)
             attempt += 1
             print(f'RPC read unavailable; waiting {delay}s before retry {attempt}. No transaction resent.', flush=True)
-            wait_locally(delay)
+            wait_locally(delay, 'RPC retry; no transaction resent')
 
 
-def wait_locally(seconds):
-    """Wait with no RPC traffic; monotonic time avoids wall-clock adjustments."""
+def wait_locally(seconds, label='Waiting locally; no RPC requests'):
+    """Monotonic countdown; animation never increases RPC traffic."""
     deadline = time.monotonic() + max(0, seconds)
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(60, remaining))
-
+    with activity(lambda: f'{label} | ~{max(0, int(deadline - time.monotonic()))}s remaining | Ctrl-C to stop'):
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(60, remaining))
 
 
 def read_local_config(path=CONFIG_PATH):
@@ -205,7 +236,23 @@ class Console:
         print(f'\nHYBURN / PRIVATE DEPLOY CONSOLE — {phase}', flush=True)
         print(f'Wallet  {self.address}\nChain   {self.args.chain_id}\nBalance {hype(balance)} HYPE', flush=True)
         if self.state:
-            print(f"Cap     {hype(self.state['cap'])} HYPE (deployment + burns + gas)\nSpent   {hype(self.state['spent'])} HYPE\nMiner   {self.state.get('miner', 'not deployed')}\nBurn    {hype(MIN_BURN)} HYPE per round", flush=True)
+            burned = len(self.state['rounds']) * MIN_BURN
+            gas_paid = self.state['spent'] - burned
+            cap_left = max(0, self.state['cap'] - self.state['spent'])
+            available = max(0, min(cap_left, balance - self.state['reserve']))
+            print(f"Burn per transaction  {hype(MIN_BURN)} HYPE + gas", flush=True)
+            print(f"Session burned total  {hype(burned)} HYPE ({len(self.state['rounds'])} confirmed burns)", flush=True)
+            print(f"Session gas paid      {hype(gas_paid)} HYPE (deployment + mining)", flush=True)
+            print(f"Total spent           {hype(self.state['spent'])} HYPE (session burns + gas)", flush=True)
+            print(f"Session spending cap  {hype(self.state['cap'])} HYPE (fixed initial budget)", flush=True)
+            print(f"Remaining cap         {hype(cap_left)} HYPE", flush=True)
+            print(f"Protected reserve     {hype(self.state['reserve'])} HYPE (minimum wallet balance)", flush=True)
+            print(f"Available to spend    {hype(available)} HYPE (burns + gas; limited by cap and balance)", flush=True)
+            print(f"Miner                 {self.state.get('miner', 'not deployed')}", flush=True)
+            last = self.state.get('last_tx_cost')
+            if last:
+                print(f"Last confirmed tx     {last['kind']}: burn {hype(last['burn'])} + gas {hype(last['gas'])} = {hype(last['burn'] + last['gas'])} HYPE", flush=True)
+            print('Amounts rounded to 9 decimals. Pending transactions are not included in totals.', flush=True)
 
     def prepare(self, fn, value=0):
         # Reject an unrelated pending transaction: this session uses a dedicated wallet.
@@ -233,7 +280,11 @@ class Console:
             receipt = self.w3.eth.get_transaction_receipt(pending['hash'])
         except TransactionNotFound:
             raise RuntimeError('Saved transaction is unresolved. No replacement or new transaction will be sent. Check its hash and rerun when resolved.')
-        self.state['spent'] += receipt['gasUsed'] * receipt['effectiveGasPrice']
+        gas_paid = receipt['gasUsed'] * receipt['effectiveGasPrice']
+        self.state['last_tx_cost'] = dict(kind=pending['kind'],
+                                          burn=pending['value'] if receipt['status'] == 1 else 0,
+                                          gas=gas_paid)
+        self.state['spent'] += gas_paid
         if receipt['status'] == 1:
             self.state['spent'] += pending['value']
             if pending['kind'] == 'deploy':
@@ -276,6 +327,7 @@ class Console:
         self.save()
         print(f'Sending {kind}: {tx_hash}', flush=True)
         self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        print('Waiting for transaction confirmation (receipt checks every 5s).', flush=True)
         self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=5)
         self.settle()
         return True
@@ -323,6 +375,7 @@ class Console:
                               reserve=int(Decimal(self.args.reserve) * UNIT), rounds=[], pending=None,
                               commit=self.source_commit)
             self.save()
+        first_deployment = not self.state.get('miner')
         self.settle()
         if self.state.get('halted'):
             raise RuntimeError(self.state['halted'])
@@ -332,23 +385,28 @@ class Console:
             if not self.send(self.factory.constructor(), 'deploy'):
                 return
         miner = self.w3.eth.contract(address=self.state['miner'], abi=self.artifact['abi'])
+        print('Verifying deployed contracts and chain parameters; RPC reads are rate-limited.', flush=True)
         genesis, token_address, vault_address = self.verify_deployment(miner)
         self.state.update(genesis=genesis, token=token_address, vault=vault_address)
         self.save()
-        # Values are public deployment facts; output remains outside the public build.
-        env = {'MINER': self.state['miner'], 'TOKEN': self.state['token'], 'VAULT': self.state['vault'],
-               'DEPLOY_BLOCK': self.state['deploy_block'], 'DEPLOY_TX': self.state['deploy_tx'], 'GENESIS': genesis,
-               'COMMIT': self.state['commit'],
-               'CHAIN_ID': self.args.chain_id}
-        self.state_path.with_suffix('.public.env').write_text(''.join(f'NEXT_PUBLIC_{k}={v}\n' for k,v in env.items()))
-        update_website(env)
-        print('Website deployment facts updated: web/.env.local (not published).', flush=True)
-        print('Building local website preview; Vercel is not invoked.', flush=True)
-        try:
-            subprocess.run(['npm', 'exec', '--', 'next', 'build', '--webpack'],
-                           cwd=ROOT / 'web', check=True, timeout=120)
-        except (subprocess.SubprocessError, OSError) as error:
-            print(f'Local website build did not finish: {error}. Facts saved; mining will continue.', flush=True)
+        if first_deployment or getattr(self.args, 'refresh_website', False):
+            # Values are public deployment facts; output remains outside the public build.
+            env = {'MINER': self.state['miner'], 'TOKEN': self.state['token'], 'VAULT': self.state['vault'],
+                   'DEPLOY_BLOCK': self.state['deploy_block'], 'DEPLOY_TX': self.state['deploy_tx'], 'GENESIS': genesis,
+                   'COMMIT': self.state['commit'],
+                   'CHAIN_ID': self.args.chain_id}
+            self.state_path.with_suffix('.public.env').write_text(''.join(f'NEXT_PUBLIC_{k}={v}\n' for k,v in env.items()))
+            update_website(env)
+            print('Website deployment facts updated: web/.env.local (not published).', flush=True)
+            print('Building local website preview; Vercel is not invoked.', flush=True)
+            try:
+                subprocess.run(['npm', 'exec', '--', 'next', 'build', '--webpack'],
+                               cwd=ROOT / 'web', check=True, timeout=120)
+            except (subprocess.SubprocessError, OSError) as error:
+                print(f'Local website build did not finish: {error}. Facts saved; mining will continue.', flush=True)
+        else:
+            print('Resuming mining; local website update/build skipped.', flush=True)
+        print('Checking previously unclaimed rewards; RPC reads are rate-limited.', flush=True)
         # Finished claims are immutable. Keep only unfinished claims in the active set.
         claim_candidates = [r for r in self.state['rounds']
                             if not miner.functions.claimed(r, self.address).call()]
@@ -357,7 +415,7 @@ class Console:
             if now < genesis:
                 delay = max(1, genesis - now)
                 print(f'Genesis in {delay}s. Local wait; no background RPC polling.', flush=True)
-                wait_locally(delay)
+                wait_locally(delay, 'Waiting for genesis')
                 continue
             rid = (now - genesis) // 999
             if rid not in self.state['rounds'] and miner.functions.burned(rid, self.address).call() == 0:
@@ -378,7 +436,7 @@ class Console:
             target = genesis + (rid + 1) * 999
             delay = max(1, target - chain_now)
             print(f'Next burn: round {rid + 1}, about {delay}s. Sleeping locally; Ctrl-C to stop.', flush=True)
-            wait_locally(delay)
+            wait_locally(delay, f'Next burn: round {rid + 1}; no RPC requests')
 
 
 def main():
@@ -395,10 +453,12 @@ def main():
     p.add_argument('--reserve', default=str(config.get('reserve_hype', '0.001')), help='HYPE left untouched; fixed on first execution')
     p.add_argument('--keystore', help='Optional encrypted keystore instead of private_key in local JSON')
     p.add_argument('--execute', action='store_true')
+    p.add_argument('--refresh-website', action='store_true', help='With --execute, refresh local website facts and build on resume; never publishes')
     args = p.parse_args()
     reserve = Decimal(args.reserve)
     if not reserve.is_finite() or reserve < 0 or reserve * UNIT != int(reserve * UNIT):
         p.error('--reserve must be a non-negative HYPE amount with at most 18 decimals')
+    print('Checking local contract build...', flush=True)
     subprocess.run(['forge', 'build', '--quiet'], cwd=ROOT, check=True)
     try:
         Console(args).run()

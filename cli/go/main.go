@@ -649,6 +649,33 @@ func doBurn(h *Hyburn, amount *big.Int, dryRun bool) bool {
 
 func cmdBurn(h *Hyburn, o opts) { h.loadKey(); doBurn(h, parseHype(o.amount), o.dryRun) }
 
+// waitLocal performs no network requests and remains interruptible.
+func waitLocal(seconds float64, label string, stop <-chan os.Signal) bool {
+	logf("%s; local wait ~%.0fs, no RPC requests", label, seconds)
+	deadline := time.Now().Add(time.Duration(max(0, seconds) * float64(time.Second)))
+	recheck := time.Now().Add(30 * time.Second)
+	tty := term.IsTerminal(int(os.Stderr.Fd()))
+	if tty {
+		defer fmt.Fprint(os.Stderr, "\r\033[2K")
+	}
+	for {
+		left := time.Until(deadline)
+		if left <= 0 || !time.Now().Before(recheck) {
+			return false
+		}
+		if tty {
+			fmt.Fprintf(os.Stderr, "\r\033[2K%s | ~%s | Ctrl-C to stop", label, fmtClock(left.Seconds()))
+		}
+		timer := time.NewTimer(min(left, 500*time.Millisecond))
+		select {
+		case <-stop:
+			timer.Stop()
+			return true
+		case <-timer.C:
+		}
+	}
+}
+
 func cmdMine(h *Hyburn, o opts) {
 	h.loadKey()
 	amount := parseHype(o.amount)
@@ -691,20 +718,16 @@ loop:
 		rid := h.roundOf(t)
 		if rid < 0 {
 			logf("not started; round 0 opens in %s", fmtClock(float64(h.genesis)-t))
-			time.Sleep(time.Duration(min(60, max(1, float64(h.genesis)-t))) * time.Second)
+			stopped = waitLocal(max(1, float64(h.genesis)-t), "Waiting for genesis", stop)
 			continue
 		}
 		if rid == lastRound {
-			time.Sleep(time.Duration(min(5, max(0.5, float64(h.roundEnd(rid))-t+1)) * float64(time.Second)))
+			stopped = waitLocal(max(0.5, float64(h.roundEnd(rid))-t+1), fmt.Sprintf("Next round %d", rid+1), stop)
 			continue
 		}
 		sendAt := float64(h.roundEnd(rid) - o.at)
 		if t < sendAt {
-			w := min(5, sendAt-t)
-			if sendAt-t < 60 {
-				w = 1
-			}
-			time.Sleep(time.Duration(w * float64(time.Second)))
+			stopped = waitLocal(sendAt-t, fmt.Sprintf("Round %d: waiting for send window", rid), stop)
 			continue
 		}
 		lastRound = rid

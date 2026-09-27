@@ -82,6 +82,25 @@ def fmt_clock(sec: float) -> str:
 def log(msg: str) -> None:
     print(time.strftime("%Y-%m-%d %H:%M:%S ") + msg, flush=True)
 
+def wait_local(seconds, label, stop):
+    """Display an estimated countdown without querying the chain."""
+    log(f"{label}; local wait ~{int(seconds)}s, no RPC requests")
+    deadline = time.monotonic() + max(0, seconds)
+    recheck = time.monotonic() + min(30, max(0, seconds))
+    tty = sys.stderr.isatty()
+    try:
+        while not stop["flag"]:
+            left = deadline - time.monotonic()
+            if left <= 0 or time.monotonic() >= recheck:
+                break
+            if tty:
+                print(f"\r\033[2K{label} | ~{fmt_clock(left)} | Ctrl-C to stop", end="", file=sys.stderr, flush=True)
+            time.sleep(min(0.5, left))
+    finally:
+        if tty:
+            print("\r\033[2K", end="", file=sys.stderr, flush=True)
+
+
 class Hyburn:
     def __init__(self, rpc: str, miner: str, chain_id: int | None, deploy_block: int):
         self.w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
@@ -345,20 +364,21 @@ def cmd_mine(hb: Hyburn, args) -> None:
         + (f", budget {fmt_hype(budget)} HYPE" if budget else "") + (", DRY RUN" if args.dry_run else ""))
     last_round = -1
     while not stop["flag"]:
+        log("Synchronizing chain time and checking round...")
         hb.sync_time()
         t = hb.now()
         rid = hb.round_of(t)
         if rid < 0:
             log(f"not started; round 0 opens in {fmt_clock(hb.genesis - t)}")
-            time.sleep(min(60, max(1, hb.genesis - t)))
+            wait_local(max(1, hb.genesis - t), "Waiting for genesis", stop)
             continue
         if rid == last_round:
-            time.sleep(min(5, max(0.5, hb.round_end(rid) - t + 1)))
+            wait_local(max(0.5, hb.round_end(rid) - t + 1), f"Next round {rid + 1}", stop)
             continue
         send_at = hb.round_end(rid) - args.at
         if t < send_at:
 
-            time.sleep(1 if send_at - t < 60 else min(5, send_at - t))
+            wait_local(send_at - t, f"Round {rid}: waiting for send window", stop)
             continue
 
         last_round = rid

@@ -12,12 +12,13 @@ use eyre::{bail, eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
+    io::{IsTerminal, Write},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 sol! {
@@ -378,6 +379,23 @@ async fn do_burn(h: &mut Hyburn, amount: U256, dry_run: bool) -> Result<bool> {
     Ok(true)
 }
 
+async fn wait_local(seconds: f64, label: &str, stop: &AtomicBool) {
+    log(&format!("{label}; local wait ~{seconds:.0}s, no RPC requests"));
+    let duration = Duration::from_secs_f64(seconds.max(0.0));
+    let start = Instant::now();
+    let tty = std::io::stderr().is_terminal();
+    while !stop.load(Ordering::SeqCst) {
+        let left = duration.saturating_sub(start.elapsed());
+        if left.is_zero() || start.elapsed() >= Duration::from_secs(30) { break; }
+        if tty {
+            eprint!("\r\x1b[2K{label} | ~{} | Ctrl-C to stop", fmt_clock(left.as_secs_f64()));
+            let _ = std::io::stderr().flush();
+        }
+        tokio::time::sleep(left.min(Duration::from_millis(500))).await;
+    }
+    if tty { eprint!("\r\x1b[2K"); let _ = std::io::stderr().flush(); }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_mine(h: &mut Hyburn, amount: &str, max_cost: Option<String>, at: u64, budget: Option<String>, rounds: Option<u64>, dry_run: bool) -> Result<()> {
     h.load_key()?;
@@ -400,16 +418,16 @@ async fn cmd_mine(h: &mut Hyburn, amount: &str, max_cost: Option<String>, at: u6
         let rid = h.round_of(t);
         if rid < 0 {
             log(&format!("not started; round 0 opens in {}", fmt_clock(h.genesis as f64 - t)));
-            tokio::time::sleep(Duration::from_secs_f64((h.genesis as f64 - t).clamp(1.0, 60.0))).await;
+            wait_local((h.genesis as f64 - t).max(1.0), "Waiting for genesis", &stop).await;
             continue;
         }
         if rid == last_round {
-            tokio::time::sleep(Duration::from_secs_f64((h.round_end(rid as u64) as f64 - t + 1.0).clamp(0.5, 5.0))).await;
+            wait_local((h.round_end(rid as u64) as f64 - t + 1.0).max(0.5), &format!("Next round {}", rid + 1), &stop).await;
             continue;
         }
         let send_at = h.round_end(rid as u64) as f64 - at as f64;
         if t < send_at {
-            tokio::time::sleep(Duration::from_secs_f64(if send_at - t < 60.0 { 1.0 } else { (send_at - t).min(5.0) })).await;
+            wait_local(send_at - t, &format!("Round {rid}: waiting for send window"), &stop).await;
             continue;
         }
         last_round = rid;

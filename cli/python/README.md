@@ -62,10 +62,24 @@ cli/python/.venv/bin/python cli/python/deploy_console.py
 cli/python/.venv/bin/python cli/python/deploy_console.py --execute
 ```
 
+The console separates burned HYPE, gas paid (deployment plus mining), total
+spending, the fixed session cap, remaining cap and protected reserve. Available
+spending is the smaller of remaining cap and wallet balance minus reserve; it
+must cover both burns and gas. The last confirmed transaction shows its actual
+burn and gas separately. Display amounts are rounded to nine decimals; all
+budget checks use integer wei. Pending transactions are excluded from totals.
+
 The initial balance caps deployment, burns and gas for the whole saved session;
 later deposits do not raise the cap. Every burn is 0.000999 HYPE. The reserve stays
-untouched. The console verifies deployed code before mining, updates the local
-website deployment facts and builds it locally; it does not publish to Vercel.
+untouched. The console verifies deployed code before mining. Only the initial
+deployment updates local website facts and builds the website. Resuming with the
+same state skips both operations. To explicitly refresh the local website on a
+resume, add `--refresh-website --execute`; this never publishes to Vercel.
+
+Interactive terminals show an animated RPC indicator and a local countdown for
+rounds and retry backoff. The animation performs no network requests. Redirected
+logs contain plain phase messages without terminal escape sequences. Ctrl-C
+clears the indicator and preserves the existing transaction journal.
 
 After a burn, it sleeps locally until the next round instead of polling every two
 seconds. It checks chain time again before sending. RPC calls are spaced at least

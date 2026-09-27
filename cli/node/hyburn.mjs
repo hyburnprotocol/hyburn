@@ -64,6 +64,22 @@ const log = (m) => console.log(stamp() + m);
 function die(m, code = 1) { console.error(m); process.exit(code); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function waitLocal(seconds, label, stopped) {
+  log(`${label}; local wait ~${Math.ceil(seconds)}s, no RPC requests`);
+  const deadline = performance.now() + Math.max(0, seconds) * 1000;
+  const recheck = performance.now() + Math.min(30, Math.max(0, seconds)) * 1000;
+  try {
+    while (!stopped()) {
+      const left = deadline - performance.now();
+      if (left <= 0 || performance.now() >= recheck) break;
+      if (process.stderr.isTTY) process.stderr.write(`\r\x1b[2K${label} | ~${fmtClock(left / 1000)} | Ctrl-C to stop`);
+      await sleep(Math.min(500, left));
+    }
+  } finally {
+    if (process.stderr.isTTY) process.stderr.write("\r\x1b[2K");
+  }
+}
+
 class Hyburn {
   constructor(rpc, miner, chainId, deployBlock) {
     this.rpc = rpc; this.minerAddr = miner; this.chainIdOpt = chainId; this.deployBlock = deployBlock;
@@ -291,10 +307,10 @@ async function cmdMine(hb, o) {
   while (!stop) {
     await hb.syncTime();
     const t = hb.now(), rid = hb.roundOf(t);
-    if (rid < 0) { log(`not started; round 0 opens in ${fmtClock(Number(hb.genesis) - t)}`); await sleep(Math.min(60, Math.max(1, Number(hb.genesis) - t)) * 1000); continue; }
-    if (rid === lastRound) { await sleep(Math.min(5, Math.max(0.5, hb.roundEnd(rid) - t + 1)) * 1000); continue; }
+    if (rid < 0) { log(`not started; round 0 opens in ${fmtClock(Number(hb.genesis) - t)}`); await waitLocal(Math.max(1, Number(hb.genesis) - t), "Waiting for genesis", () => stop); continue; }
+    if (rid === lastRound) { await waitLocal(Math.max(0.5, hb.roundEnd(rid) - t + 1), `Next round ${rid + 1}`, () => stop); continue; }
     const sendAt = hb.roundEnd(rid) - at;
-    if (t < sendAt) { await sleep((sendAt - t < 60 ? 1 : Math.min(5, sendAt - t)) * 1000); continue; }
+    if (t < sendAt) { await waitLocal(sendAt - t, `Round ${rid}: waiting for send window`, () => stop); continue; }
     lastRound = rid;
     const [r, reward] = await Promise.all([hb.miner.rounds(rid), hb.miner.previewCurrentRoundReward()]);
     const cost = reward ? ((r.totalBurned + amount) * ONE_TOKEN) / reward : null;
