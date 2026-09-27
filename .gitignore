@@ -1,0 +1,50 @@
+# Compiler files
+cache/
+out/
+
+# Commonly ignored directories
+.logs/
+.ignore/
+
+# Ignores development broadcast logs
+!/broadcast
+/broadcast/*/31337/
+/broadcast/**/dry-run/
+
+
+# Dotenv file
+.env
+.env.*
+!.env.example
+
+# Local build artifacts
+/broadcast/
+.DS_Store
+/output/
+/.claude/
+
+# Not published: private deployment scripts, internal tooling and records
+/script/
+/docs/
+/brand/social/
+/slither.config.json
+/web/CLAUDE.md
+/web/README.md
+/web/AGENTS.md
+
+# Local agent/editor settings (at any depth)
+.claude/
+.claud/
+.codex/
+.agents/
+CLAUDE.md
+AGENTS.md
+.vscode/
+.idea/
+
+# Local credentials and generated Python files
+*.pem
+*.key
+*.keystore.json
+__pycache__/
+*.py[cod]

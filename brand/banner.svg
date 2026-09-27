@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="500" viewBox="0 0 1500 500">
+  <rect width="1500" height="500" fill="#f0f0f0"/>
+  <!-- menu bar -->
+  <rect x="0" y="0" width="1500" height="44" fill="#f0f0f0"/>
+  <line x1="0" y1="44" x2="1500" y2="44" stroke="#808080" stroke-width="2"/>
+  <g font-family="'Segoe UI', Tahoma, system-ui, Arial, sans-serif" font-size="20" fill="#000000">
+    <text x="24" y="30" font-weight="700">Hyburn</text>
+    <text x="150" y="30" text-decoration="underline">Now</text>
+    <text x="230" y="30">Mine</text>
+    <text x="320" y="30">Whitepaper</text>
+    <text x="470" y="30">Verify</text>
+  </g>
+  <!-- headline -->
+  <g font-family="'Segoe UI', Tahoma, system-ui, Arial, sans-serif" fill="#000000">
+    <text x="80" y="165" font-size="56" font-weight="700">Burn HYPE every 999 seconds.</text>
+    <text x="80" y="215" font-size="26">Share the HYBURN issued for the round.</text>
+    <text x="80" y="252" font-size="26">Fixed supply, halving, no one in charge.</text>
+    <text x="80" y="300" font-size="20" fill="#3c3c3c">No premine. No admin. No randomness.</text>
+    <text x="80" y="330" font-size="20" fill="#3c3c3c">The burn is the whole protocol.</text>
+  </g>
+  <!-- sunken panel: round clock -->
+  <rect x="1010" y="90" width="430" height="300" fill="#ffffff" stroke="#808080" stroke-width="3"/>
+  <rect x="1013" y="93" width="424" height="294" fill="none" stroke="#404040" stroke-width="1"/>
+  <g font-family="ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace" fill="#000000">
+    <text x="1035" y="140" font-size="22" font-family="'Segoe UI', Tahoma, system-ui, Arial, sans-serif" font-weight="700">Round 0 ends in</text>
+    <text x="1035" y="235" font-size="88">16:39</text>
+    <text x="1035" y="300" font-size="20">HYBURN issued     5,781.25</text>
+    <text x="1035" y="335" font-size="20">HYPE burned so far  0.0000</text>
+    <text x="1035" y="370" font-size="20">Per 1 HYPE       all of it</text>
+  </g>
+  <!-- status bar -->
+  <line x1="0" y1="456" x2="1500" y2="456" stroke="#808080" stroke-width="2"/>
+  <text x="24" y="484" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="18" fill="#000000">Connected to HyperEVM · chain 999 · Round 0 · Non-empty rounds 0</text>
+</svg>

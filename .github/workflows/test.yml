@@ -1,0 +1,101 @@
+name: CI
+
+permissions: {}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contracts:
+    name: Contracts (tests + invariants)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: forge fmt --check src test
+      - run: forge build --sizes
+      - run: forge test -vv
+
+  web:
+    name: Website
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  miners:
+    name: Miner conformance (${{ matrix.lang }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: python
+            cmd: cli/python/.venv/bin/python cli/python/hyburn.py
+          - lang: node
+            cmd: node cli/node/hyburn.mjs
+          - lang: go
+            cmd: cli/go/hyburn
+          - lang: rust
+            cmd: cli/rust/target/release/hyburn
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: matrix.lang == 'python'
+        run: python -m venv cli/python/.venv && cli/python/.venv/bin/pip install -r cli/python/requirements.txt
+      - if: matrix.lang == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: matrix.lang == 'node'
+        run: cd cli/node && npm ci && node --check hyburn.mjs
+      - if: matrix.lang == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: cli/go/go.sum
+      - if: matrix.lang == 'go'
+        run: cd cli/go && go build -o hyburn .
+      - if: matrix.lang == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+      - if: matrix.lang == 'rust'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli/rust
+      - if: matrix.lang == 'rust'
+        run: cd cli/rust && cargo build --release --locked
+      - run: forge build
+      - name: Cache boundary regression
+        run: python3 cli/conformance/cache_boundary.py "${{ matrix.cmd }}"
+      - name: Local-chain conformance
+        run: cli/conformance/run.sh "${{ matrix.cmd }}"
