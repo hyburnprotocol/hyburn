@@ -85,8 +85,9 @@ def stop_engine(process):
 
 
 def run_engine(command, args, engine):
-    from setup_miner import load_profile
+    from setup_miner import load_profile, validate_miner_setting
     load_profile()
+    validate_miner_setting(option(args,'--miner',os.environ.get('HYBURN_MINER','')))
     rpc=option(args,'--rpc',os.environ.get('HYBURN_RPC','https://rpc.hypurrscan.io'))
     with terminal_ui.Dashboard(title=f'HYBURN / {engine.upper()} MINER') as ui:
         ui.update(Engine=engine,Mode='STANDBY - no transactions sent')

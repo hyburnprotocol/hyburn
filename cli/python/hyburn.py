@@ -535,7 +535,7 @@ def cmd_mine(hb: Hyburn, args) -> None:
     log(f"mining stopped. burned {fmt_hype(spent)} HYPE in {burns} round(s)")
 
 def main() -> None:
-    from setup_miner import load_profile, main as setup
+    from setup_miner import load_profile, main as setup, validate_miner_setting
     if sys.argv[1:] == ["setup"]:
         setup(); return
     load_profile()
@@ -581,6 +581,7 @@ def main() -> None:
     args = p.parse_args()
     if args.cmd == 'setup':
         setup(); return
+    validate_miner_setting(args.miner)
     with terminal_ui.Dashboard(enabled=args.cmd == "mine" and not args.plain) as dashboard:
         if args.cmd == 'mine':
             terminal_ui.preview_start(dashboard,sys.argv[1:])

@@ -120,7 +120,7 @@ class Dashboard:
     def __init__(self, enabled=True, title='HYBURN / MINER'):
         self.output, self.errors = sys.stdout, sys.stderr
         size = shutil.get_terminal_size((80, 24))
-        self.enabled = enabled and os.environ.get('TERM') != 'dumb' and self.output.isatty() and self.errors.isatty() and size.columns >= 80 and size.lines >= 24
+        self.enabled = enabled and os.environ.get('TERM') != 'dumb' and self.output.isatty() and self.errors.isatty() and size.columns >= 60 and size.lines >= 20
         self.title = title
         self.fields = {'Engine': 'python'}
         self.events = deque(maxlen=400)
@@ -134,6 +134,10 @@ class Dashboard:
         self.done = threading.Event()
         self.worker = None
         self.chain_clock = None
+        self.clock_duration = 999
+        self.clock_before_genesis = False
+        self.market = None
+        self.reduced_motion = os.environ.get('HYBURN_REDUCED_MOTION') == '1'
         self.signing = False
         self.awaiting_start = False
         self.start_choice = None
@@ -181,6 +185,8 @@ class Dashboard:
             next_round = max(0, (int(timestamp) - genesis) // duration + 1)
             target = genesis + next_round * duration
             self.chain_clock = (time.monotonic(), max(0, target - timestamp), next_round)
+            self.clock_duration = duration
+            self.clock_before_genesis = timestamp < genesis
 
     def countdown(self):
         if self.chain_clock is None:
@@ -303,129 +309,194 @@ class Dashboard:
         lines.append('+' + '-' * inside + '+')
         return lines
 
+    def progress_rows(self, width):
+        """Animate only an existing chain observation; never assume a new round."""
+        if self.chain_clock is None:
+            return ['ROUND CLOCK  Waiting for chain sync',
+                    'Progress appears after the first verified chain read.']
+        anchor, remaining, next_round = self.chain_clock
+        age = max(0, time.monotonic() - anchor)
+        left = max(0, remaining - age)
+        if self.clock_before_genesis:
+            return [f'GENESIS  Starts in ~{int(left + .999)}s' if left else 'GENESIS  Awaiting chain confirmation',
+                    f'Local estimate | chain synced {int(age)}s ago']
+        ratio = min(1, max(0, 1 - left / self.clock_duration))
+        cells = max(10, min(48, width - 26))
+        filled = int(ratio * cells)
+        bar = '=' * filled + '-' * (cells - filled)
+        window = re.match(r'(\d+)s before round end', self.fields.get('Send window', ''))
+        schedule = ''
+        if window and not self.privacy:
+            window_seconds = int(window.group(1))
+            marker = min(cells - 1, max(0, int(cells * (1 - window_seconds / self.clock_duration))))
+            bar = bar[:marker] + '|' + bar[marker + 1:]
+            schedule = f' | Burn window in ~{max(0, int(left-window_seconds))}s' if left > window_seconds else ' | Burn window reached'
+        state = f'ends in ~{int(left)//60:02}:{int(left)%60:02}' if left else 'awaiting chain confirmation'
+        return [f'ROUND {next_round-1}  [{bar}] {ratio:5.1%}',
+                f'{state}{schedule} | sync {int(age)}s ago (estimate)']
+
+    def market_line(self, width):
+        """Read cached public market data, never make an API request while drawing."""
+        if not self.market:
+            return 'HYPE/USDC  -- | Spot price feed starts with the dashboard'
+        data = self.market.snapshot()
+        price, age = data.get('price'), data.get('age')
+        if price is None:
+            return 'HYPE/USDC  -- | SPOT | ' + data.get('status', 'unavailable').upper()
+        label = 'STALE' if data.get('stale') else ('LIVE' if data.get('status') == 'live' else data.get('status','cached').upper())
+        change = data.get('session_change_pct')
+        change_text = f' | Session {change:+.2f}%' if change is not None else ''
+        history = data.get('history', ())[-20:]
+        chart = ''
+        if width >= 110 and len(history) > 1:
+            low, high = min(history), max(history)
+            levels = '._-:=+*#'
+            chart = ' ' + ''.join(levels[min(7, int((v-low)/(high-low)*7))] if high>low else '-' for v in history)
+        return f'HYPE/USDC {price:,.4f} | SPOT MID | {label} {int(age or 0)}s{change_text}{chart}'
+
     def frame(self, width, height):
         width = max(1, width - 1)
-        if width < 79 or height < 24:
-            return '\n'.join(line[:width] for line in [self.title, 'Resize to at least 80 x 24.', 'Standby: S starts, Q exits.' if self.awaiting_start else 'Mining continues. Ctrl-C stops.'][:max(0, height)])
+        if width < 59 or height < 20:
+            action = 'Standby: S starts, Q exits.' if self.awaiting_start else 'Ctrl-C stops; submitted transactions may still confirm.'
+            return '\n'.join(line[:width] for line in [self.title + ' | ' + self.fields.get('Mode', 'Starting'), 'Compact terminal: resize to at least 60 x 20.', self.countdown(), action][:max(0,height)])
         with self.lock:
             status = self.status() if callable(self.status) else self.status
             if self.privacy:
                 status = 'Privacy view enabled; execution settings unchanged.'
-            tabs = ['1 Home', '2 Costs', '3 Logs', '4 Round', '5 Mine', '6 Token', '7 Total', '?']
+            tabs = ['1 Overview','2 Wallet','3 Activity','4 Round','5 History','6 Token','7 Leaders','? Help']
+            if width < 100:
+                tabs = ['1 Home','2 Wallet','3 Logs','4 Round','5 Yours','6 CA','7 Rank','?']
+            if width < 75:
+                tabs = ['1 Home','2 Wallet','3 Log','4 Round','5 Me','6 CA','7 All','?']
             tabs[self.page] = '[' + tabs[self.page] + ']'
             title = self.title
             if not self.privacy and self.names and self.fields.get('Wallet'):
                 name = self.names.get(self.fields['Wallet'])
                 if name:
                     title += ' | ' + (name if len(name) <= 24 else name[:21] + '...')
-            lines = [self.mark[0] + '  ' + title,
-                     self.mark[1] + '  ' + self.countdown(),
-                     self.mark[2] + f'  Stats: {"PAUSED" if self.stats_paused else "ON DEMAND"} | Privacy: {"ON" if self.privacy else "OFF"} | local clock',
-                     '  '.join(tabs)]
-            lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
-            space = max(3, height - len(lines) - 1)
+            lines = [title, '  '.join(tabs),
+                     'Stats: ' + ('PAUSED' if self.stats_paused else 'ON DEMAND') +
+                     ' | Privacy: ' + ('ON' if self.privacy else 'OFF') + ' | Engine: ' + self.fields.get('Engine','--')]
+            lines += self.progress_rows(width)
+            spinner = '.' if self.reduced_motion else '|/-\\'[int(time.monotonic()*4)%4]
+            lines += [f'{spinner} {clean(status)}']
+            footer = [self.market_line(width),
+                      'S: START  Q: EXIT | No new submissions until start' if self.awaiting_start else
+                      'Tab: pages  r: refresh  p: stats  v: privacy  F: finish/claim  ^C: exit']
+            space = max(3, height-len(lines)-len(footer))
             if self.page == 0:
                 if self.awaiting_start:
-                    rows = ['Burns are irreversible. Transaction gas is extra.',
-                            'Requested HYPE settings; validated after unlocking.',
+                    rows = ['REVIEW -> S: START -> UNLOCK -> VERIFY -> MINE',
+                            'All requested amounts are HYPE. Burns are irreversible.',
+                            'Transaction gas is extra.',
                             *[f'{key}: {self.display_field(key,self.fields[key])}' for key in
                               ('Requested burn','Requested budget','Requested reserve','Reward claims','Session action') if key in self.fields],
+                            'Saved values are checked after unlocking.',
                             'First burn normally waits until 30s before round end.',
-                            'S: continue and unlock wallet. Q: exit without mining.']
+                            'Q exits without starting. Existing transactions may confirm.']
                     lines += self.box('BEFORE YOU START', rows, width, space)
-                    lines += ['S: START   Q: EXIT   (no new submissions until start)']
-                    return '\n'.join(line[:width] for line in lines[:height])
-                left_keys = ['Mode', 'Round (last read)', 'Block (last read)', 'Engine', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Session burns', 'Phase', 'Chain', 'Send window']
-                right_keys = ['Balance (snapshot)', 'Available incl. gas', 'Session burned', 'Session gas', 'Session spent', 'Burn budget', 'Burn spending']
-                def rows(keys):
-                    result = []
-                    for key in keys:
+                else:
+                    keys = [('Mode','Status'),('Burn / transaction','Burn / transaction'),('Burn / round','Burn / round'),
+                            ('Burn budget','Burn budget (gas extra)'),('Burn spending','Burn budget used'),
+                            ('Available incl. gas','Available incl. gas'),('Session burned','Burned in saved session'),
+                            ('Session gas','Gas paid in saved session'),('Session burns','Confirmed burns'),
+                            ('Confirmed burns','Confirmed burns')]
+                    rows = []
+                    for key,label in keys:
                         if key in self.fields:
-                            result.extend([key, '  ' + self.display_field(key, self.fields[key])])
-                    return result[:max(0, (panel_height - 2) // 2) * 2] or ['Waiting for first snapshot...']
-                panel_height = max(5, space - 5)
-                split = width // 2
-                left = self.box('MINING', rows(left_keys), split, panel_height)
-                right = self.box('HYPE / COSTS', rows(right_keys), width - split, panel_height)
-                lines += [a + b for a, b in zip(left, right)]
-                lines += self.box('RECENT EVENTS (3: full history)', (['Log details hidden for sharing.'] if self.privacy else list(self.events)[-3:]), width, 5)
+                            rows.append(f'{label:<27} {self.display_field(key,self.fields[key])}')
+                    rows += ['Balances and rewards are snapshots. 2: wallet / costs.']
+                    event_height = 5 if space >= 15 else 0
+                    lines += self.box('MINING OVERVIEW', rows, width, space-event_height)
+                    if event_height:
+                        events = ['Log details hidden for sharing.'] if self.privacy else list(self.events)[-3:]
+                        lines += self.box('RECENT ACTIVITY / 3: FULL LOG', events, width, event_height)
             elif self.page == 1:
-                rows = [f'{key:<22} {self.display_field(key,value)}' for key, value in self.fields.items()]
+                rows = [f'{key:<22} {self.display_field(key,value)}' for key,value in self.fields.items()]
                 if self.names and 'Wallet' in self.fields:
-                    rows.insert(1, f'{"Wallet address":<22} {self.display_field("Wallet address", self.fields["Wallet"])}')
-                rows += ['Snapshots from last read. No refresh RPC.', 'Public miner budget: saved across restarts; gas extra.', 'Deploy console cap: saved; includes gas.']
-                lines += self.box('WALLET / COSTS - j/k scroll, g top', rows[self.scroll:], width, space)
+                    rows.insert(1, f'{"Wallet address":<22} {self.display_field("Wallet address",self.fields["Wallet"])}')
+                rows += ['Snapshots from last read. No refresh RPC.', 'Public miner budget: saved across restarts; gas extra.',
+                         'Deploy console cap: saved; includes gas.']
+                lines += self.box('WALLET / COSTS - j/k scroll, g top',rows[self.scroll:],width,space)
             elif self.page == 2:
-                end = len(self.events) - self.scroll
-                rows = ['Log details hidden for sharing.'] if self.privacy else list(self.events)[max(0, end - space + 2):end]
-                lines += self.box('EVENTS - k older, j newer, g latest', rows, width, space)
-            elif self.page in (3, 4, 6):
+                end = len(self.events)-self.scroll
+                rows = ['Log details hidden for sharing.'] if self.privacy else list(self.events)[max(0,end-space+2):end]
+                lines += self.box('ACTIVITY - k older, j newer, g latest',rows,width,space)
+            elif self.page in (3,4,6):
                 snapshot = self.snapshots.get(self.page)
-                title = {3:'CURRENT ROUND / BURN RANK',4:'MY RECENT ROUNDS',6:'ALL-TIME / MINING PARTICIPATION'}[self.page]
-                rows = ['Statistics PAUSED (p resumes; mining is unchanged)' if self.stats_paused else self.insight_messages.get(self.page, 'Open this tab after starting to load statistics.')]
+                heading = {3:'CURRENT ROUND / BURN RANK',4:'MY ROUND HISTORY',6:'ALL-TIME / MINING PARTICIPATION'}[self.page]
+                rows = ['Statistics PAUSED (p resumes; mining is unchanged)' if self.stats_paused else self.insight_messages.get(self.page,'Open this tab after starting to load statistics.')]
                 if self.privacy:
                     rows = ['Public statistics only; personal rows and filters hidden.']
                 if snapshot:
-                    data, caption, note, updated = snapshot
+                    data,caption,note,updated = snapshot
                     if self.privacy:
                         if self.page == 4:
                             rows = ['Personal round history hidden for sharing.']
                         else:
-                            rows += textwrap.wrap(self.public_summaries.get(self.page) or 'Public summary not available yet.', width=max(1,width-2))
+                            rows += textwrap.wrap(self.public_summaries.get(self.page) or 'Public summary not available yet.',width=max(1,width-2))
                             rows += [f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)',
                                      'Wallets are not people. No personal wallet markers shown.']
                     else:
-                        rows += [caption, f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note]
+                        rows += [caption,f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)',note]
                     if not self.privacy and self.page in self.tables:
                         self.tables[self.page].names = self.names
-                        rows += self.tables[self.page].render(width-2, space-2-len(rows), self.privacy)
+                        rows += self.tables[self.page].render(width-2,space-2-len(rows),self.privacy)
                     elif not self.privacy:
                         rows += data[self.scroll:]
-                lines += self.box(title, rows, width, space)
+                lines += self.box(heading,rows,width,space)
             elif self.page == 5:
-                rows = ['Token CA (from the miner contract):', self.fields.get('Token CA', 'Not read yet'),
-                        'Miner contract (different from the token):', self.fields.get('Miner', '--'),
-                        'Chain: ' + self.fields.get('Chain', '--'),
-                        'Verify the address on this chain, not just the name.']
-                lines += self.box('TOKEN IDENTITY', rows, width, space)
+                rows = ['Token CA (from the miner contract):',self.fields.get('Token CA','Not read yet'),
+                        'Miner contract (different from the token):',self.fields.get('Miner','--'),
+                        'Chain: '+self.fields.get('Chain','--'),'Verify the address on this chain, not just the name.']
+                lines += self.box('TOKEN IDENTITY',rows,width,space)
             else:
-                rows = ['1 / 2 / 3 / ? : overview, wallet & costs, events, help',
-                        '4: current round. 5: your history. 6: token. 7: all-time.',
+                rows = ['1 Overview  2 Wallet  3 Activity  4 Current round',
+                        '5 Your history  6 Token identity  7 All-time leaders',
+                        'Tab changes page. j/k or arrows scroll. g resets scroll.',
                         'Tables: / search, o sort, m your wallet, f claim status.',
-                        'c clears filters. j/k select; PgUp/PgDn move five rows.',
-                        'r requests refresh (cooldowns apply). p pauses STATISTICS.',
-                        'v privacy: public totals only; hides personal rows/logs.',
-                        'Privacy does not hide window titles or shell scrollback.',
-                        'Tab: next page. j/k or arrows: scroll. g: reset scroll.',
-                        'F: finish and claim (gas applies); Ctrl-C: stop immediately.',
-                        'Navigation never sends transactions or changes spending.',
-                        'Countdowns are local estimates, not chain confirmations.',
-                        'Balances and round data update only when the miner reads them.',
-                        'Use --plain for persistent line-by-line logs.',
-                        'Keep enough native HYPE for claim gas after your final round.']
-                lines += self.box('HELP', rows, width, space)
-            lines += ['S: START   Q: EXIT   (no new submissions until start)' if self.awaiting_start else 'Tab: tabs  r: refresh  p: stats  v: privacy  ?: help  F: finish  Ctrl-C: exit']
+                        'c clears filters. PgUp/PgDn move five rows.',
+                        'r refreshes statistics (cooldowns apply).',
+                        'p pauses STATISTICS ONLY, not mining. v toggles privacy.',
+                        'F finishes mining and claims when eligible; gas applies.',
+                        'Ctrl-C stops immediately; pending transactions may confirm.',
+                        'Navigation never signs or changes spending.',
+                        'Progress is a local estimate, not chain confirmation.',
+                        'Spot prices are informational; they never control mining.',
+                        'Privacy cannot hide window titles or shell scrollback.',
+                        'HYBURN_MARKET_FEED=0 disables the public price stream.',
+                        'HYBURN_REDUCED_MOTION=1 reduces animation. NO_COLOR disables color.',
+                        'Use --plain for persistent line logs. Keep gas for claims.']
+                lines += self.box('HELP - j/k scroll, g top',rows[self.scroll:],width,space)
+            lines += footer
             return '\n'.join(line[:width] for line in lines[:height])
 
     def styled_frame(self, width, height):
-        """Apply color after layout so ANSI escapes never affect column widths."""
-        frame = self.frame(width, height)
+        """Semantic dark/mint theme, with portable ANSI and NO_COLOR fallbacks."""
+        frame = self.frame(width,height)
         if not self.color:
             return frame
+        truecolor = os.environ.get('COLORTERM','').lower() in ('truecolor','24bit')
+        palette = {'text':(229,238,233),'mint':(151,252,228),'muted':(155,173,165),
+                   'border':(41,66,57),'warning':(233,189,117),'error':(240,128,128)}
+        ansi = {'text':'37','mint':'1;36','muted':'37','border':'36','warning':'33','error':'1;31'}
         lines = []
-        for index, line in enumerate(frame.splitlines()):
+        for index,line in enumerate(frame.splitlines()):
             lower = line.lower()
-            code = '0'
-            if index < 3:
-                code = '1;36'  # Cyan network mark and clock; portable ANSI palette.
-            elif index == 3 or line.startswith('+'):
-                code = '36'
-            elif any(word in lower for word in ('failed', 'reverted', 'error:', 'stop:')):
-                code = '1;31'
-            elif any(word in lower for word in ('retry', 'unavailable', 'awaiting', 'cooling')):
-                code = '33'
-            elif line.startswith('|>') or any(word in lower for word in ('confirmed', 'verified:')):
-                code = '32'
+            role = 'text'
+            if index <= 1 or line.startswith('ROUND '):
+                role = 'mint'
+            elif line.startswith('+'):
+                role = 'mint' if any(c.isalpha() for c in line) else 'border'
+            elif any(word in lower for word in ('failed','reverted','error:','stop:')):
+                role = 'error'
+            elif any(word in lower for word in ('retry','unavailable','stale','awaiting','cooling')):
+                role = 'warning'
+            elif 'confirmed' in lower or 'verified:' in lower:
+                role = 'mint'
+            elif index == 2 or 'sync ' in lower or line.startswith('HYPE/USDC'):
+                role = 'muted'
+            code = ('38;2;'+';'.join(map(str,palette[role]))+';48;2;7;20;17') if truecolor else ansi[role]
             lines.append(f'\x1b[{code}m{line}\x1b[0m')
         return '\n'.join(lines)
 
@@ -440,10 +511,14 @@ class Dashboard:
             size = shutil.get_terminal_size((80, 24))
             self.output.write('\x1b[H' + self.styled_frame(size.columns, size.lines).replace('\n', '\x1b[K\r\n') + '\x1b[K\x1b[J')
             self.output.flush()
-            self.done.wait(0.25)
+            self.done.wait(1.0 if self.reduced_motion else 0.25)
 
     def start(self):
         self.done.clear()
+        if self.market is None:
+            from market_feed import MarketFeed
+            self.market = MarketFeed()
+            self.market.start()
         if termios is not None and sys.stdin.isatty():
             self.input_fd = sys.stdin.fileno()
             self.input_mode = termios.tcgetattr(self.input_fd)
@@ -486,6 +561,8 @@ class Dashboard:
             try:
                 self.start()
             except BaseException:
+                if self.market:
+                    self.market.stop()
                 self.stop()
                 _CURRENT = None
                 raise
@@ -493,6 +570,8 @@ class Dashboard:
 
     def __exit__(self, *_):
         global _CURRENT
+        if self.market:
+            self.market.stop()
         if self.names:
             self.names.close()
         if self.insights:

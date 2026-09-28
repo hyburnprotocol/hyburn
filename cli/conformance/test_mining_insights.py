@@ -175,11 +175,19 @@ class StartTests(unittest.TestCase):
 
     def test_decline_public_precedes_key_and_session_recovery(self):
         hb=MagicMock()
-        with patch.object(sys,'argv',['hyburn','mine']), patch('setup_miner.load_profile'), \
+        with patch.object(sys,'argv',['hyburn','--miner','0x'+'11'*20,'mine']), patch('setup_miner.load_profile'), \
              patch.object(hyburn,'Hyburn',return_value=hb) as connection, patch.object(ui,'choose_start',return_value=False):
             hyburn.main()
         connection.assert_not_called()
         hb.load_key.assert_not_called(); hb.open_session.assert_not_called()
+
+    def test_missing_miner_fails_before_start_choice_or_rpc(self):
+        with patch.object(sys, 'argv', ['hyburn', '--miner', '', 'mine']), patch('setup_miner.load_profile'), \
+             patch.object(ui, 'choose_start') as choose, patch.object(hyburn, 'Hyburn') as connection:
+            with self.assertRaisesRegex(SystemExit, 'Mining connection is not configured'):
+                hyburn.main()
+        choose.assert_not_called()
+        connection.assert_not_called()
 
     def test_start_preview_is_explicit_and_privacy_safe(self):
         d=ui.Dashboard(False)

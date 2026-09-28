@@ -78,6 +78,16 @@ reserve a reward. Do not remove `--dry-run` unless you intend an immediate burn.
 
 ## 5. Start a bounded session
 
+For guided setup, run `./hyburn` to open the control center, then choose **Configure mining**.
+Enter the HYPE amount to burn per round and the total burn budget. Amounts must
+be plain decimal numbers, without commas or currency symbols. Gas is extra;
+the default protected reserve is 0.001 HYPE. Press **Q** at either prompt to
+cancel. These inputs do not start mining or reset an existing session budget.
+Choose **H** in the control center for the first-time checklist. Liquidity
+management is optional and is not required for mining.
+
+Alternatively, enter the same limits directly:
+
 ```sh
 ./cli/hyburn mine --amount 0.000999 --budget 0.001998
 ```

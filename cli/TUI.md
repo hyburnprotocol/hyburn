@@ -166,10 +166,26 @@ overview. Python, Node.js, Go and Rust are selected in the same menu. Explicit
 commands such as `./hyburn --engine rust mine` continue to work. Mining retains
 its own start confirmation. Noninteractive use requires an explicit command.
 
+Choose **Configure mining** to enter a burn amount and
+burn-only budget without remembering command flags. Gas is additional and the
+default protected wallet reserve is 0.001 HYPE. **Q** at either input cancels;
+the next screen still requires explicit start confirmation. This path never
+resets an existing budget. Choose **Resume mining** to resume saved settings, or **H** for
+the beginner checklist. The mint header and grouped sections distinguish mining
+from optional liquidity management.
+
 The public pool overview never loads a signer. It shows the existing canonical
-HYBURN/WHYPE 0.3% pool and links to Project X. Choose **7 — My liquidity** to manage your own positions through the public
+HYBURN/WHYPE 0.3% pool and links to Project X. Choose **Manage liquidity** to manage your own positions through the public
 liquidity wizard. See [liquidity management](LIQUIDITY.md). Creating a position
 does not create a different pool. Pool balances are not active depth or a trade quote.
+
+In the liquidity wizard, **H** explains current-price ranges, HYBURN-only ranges
+above the current price, and HYPE versus WHYPE. Deposit maximums are principal;
+transaction gas is a separate native-HYPE limit. If you want native HYPE to become
+deposit principal, use the explicit wrap action first. An above-market HYBURN-only
+range does not immediately deepen current trading and earns no fees until price
+enters it. Range inputs are always HYPE per HYBURN. Review the quote before
+choosing to sign; creating a quote does not deposit assets.
 
 The public liquidity menu is the single supported liquidity interface. Historical
 pool-creation records remain local and are not required by this menu.
@@ -198,3 +214,50 @@ terminal, `kill -USR1 <miner-pid>` requests the same graceful finish.
 If gas, RPC access or a configured spending cap prevents settlement, the miner
 stops with an error; rewards remain claimable. Restart with the same session after
 resolving the issue. Nothing runs after the program exits.
+
+## Theme, round progress and public price footer
+
+All four mining engines share the dark mint display. True-color terminals use
+explicit mint/green-black colors; other terminals use their ANSI palette.
+`NO_COLOR=1` disables color. `HYBURN_REDUCED_MOTION=1` reduces animation to one
+redraw per second and replaces the activity spinner with a stationary marker.
+Small windows use shorter navigation labels; below 60 x 20 a compact state view
+keeps the clock and stop/start guidance visible. Resize to see tables and costs.
+
+The round bar fills from the last chain timestamp using monotonic local elapsed
+time. A `|` marks the configured burn window when known. Reaching the end never
+confirms the next round: the UI waits for an existing engine chain read. Before
+genesis it shows a start countdown instead. The bar is elapsed time, not a
+transaction confirmation percentage or a guaranteed reward share.
+
+The footer streams the public Hyperliquid **HYPE/USDC spot midpoint**, resolved
+from spot metadata (never the HYPE perpetual). The stream uses its own background
+WebSocket, not the mining RPC, and sends no wallet information. Its status shows
+LIVE, RETRYING or STALE and the age of the last valid observation. After 45 seconds
+without a price it is stale; failures back off from 5 to 120 seconds. If WebSocket
+support is unavailable, REST snapshots are requested every 30 seconds. Prices
+never change burn amounts, budgets or transaction decisions. This is a public
+mainnet market reference, including when the mining engine uses a test chain.
+
+`Session` is change since this dashboard's first received price, **not 24h change**.
+Wide terminals show a small history of actual received observations, sampled no
+more than once per five seconds. No historical prices are fabricated. USDC is the
+quote asset; this is not a USD valuation or executable quote. Disable the feed
+with `HYBURN_MARKET_FEED=0`. Plain CLI output does not start a price stream.
+
+Sources: [Hyperliquid subscriptions](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions)
+and [API limits](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits).
+
+The control center numbers only the actions available in the current state,
+consecutively. Follow action labels rather than memorizing numbers. Without a
+configured wallet, it shows Set up wallet and omits Resume mining. With a wallet
+but no matching journal it offers Configure mining. Resume mining appears only
+when a journal exists for the configured wallet, chain and Miner; another
+wallet's journal does not count. Menus refresh after each action.
+
+Local developer sessions remain separate: the default developer journal enables
+a clearly named developer resume action. A developer configuration without that
+journal is labeled Open developer console instead (also used for custom journal
+paths). No developer configuration or private key is read to decide this menu.
+No action migrates budgets or automatically passes --yes or --new-session.
+Invalid public Miner addresses fail before the interactive start gate.
