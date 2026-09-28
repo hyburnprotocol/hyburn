@@ -53,9 +53,9 @@ export default function MinePage() {
       <pre><code>./cli/hyburn mine --amount 0.000999 --budget 0.001998</code></pre>
       <p>This example authorizes at most two minimum burns, plus gas. Read the requested settings, then press <strong>S</strong> to continue or <strong>Q</strong> to cancel. In a small/plain terminal, enter y at <code>[y/N]</code> to continue; Enter alone cancels. Unlock your keystore when prompted.</p>
       <p>The first burn normally waits until 30 seconds before the round ends. A countdown near 999 seconds is normal. It is a local estimate; LIVE means execution mode, not a confirmed transaction. Keep the terminal open and computer awake.</p>
-      <p>On reaching the saved limit, the miner waits for its final round to end and automatically claims its remaining rewards. Let that finish. If HYBURN is not visible in your wallet, use the official Token CA on tab 6 to import it; the Miner address is different.</p>
+      <p>After you start mining, ended rewards are automatically checked at startup and on round changes, including when a cost limit skips a burn. Claims cost gas in addition to the burn budget. On reaching the saved limit, the miner waits for its final round to end and automatically claims its remaining rewards. Let that finish. If HYBURN is not visible in your wallet, use the official Token CA on tab 6 to import it; the Miner address is different.</p>
       <h2>6. Stop and resume</h2>
-      <p>Press Ctrl-C to stop. Previously submitted transactions can still confirm. In a new terminal, enter the same project folder, then run:</p>
+      <p>Press Shift-F in the dashboard to stop new burns, wait for the last round, claim rewards and exit. Ctrl-C exits immediately; unfinished rewards are recovered on your next mining start. Previously submitted transactions can still confirm. In a new terminal, enter the same project folder, then run:</p>
       <pre><code>{`./cli/hyburn mine`}</code></pre>
       <p>A restart resumes the same budget; it does not reset spending. Depositing more HYPE does not increase that budget. To authorize a new budget, use <code>mine --new-session</code> with your full intended settings. Run one engine at a time for a wallet.</p>
       <h2>Optional: choose another engine</h2>
@@ -92,7 +92,7 @@ export default function MinePage() {
           <tr><td>7</td><td>All-time participation: cumulative burns, rounds and claimed rewards.</td></tr>
         </tbody>
       </table>
-      <p>Use / to search, o to sort, m to filter to your wallet, f to filter claim status, and v for privacy view. The p key pauses statistics only, not mining. Ctrl-C stops the engine.</p>
+      <p>Use / to search, o to sort, m to filter to your wallet, f to filter claim status, and v for privacy view. The p key pauses statistics only, not mining. Shift-F finishes and claims; Ctrl-C stops immediately.</p>
       <p>For screenshots, turn on Privacy with v. Public round information and aggregate statistics stay visible; personal wallet rows, ranks, shares, history, filters, amounts and raw logs are hidden. Crop to the TUI: window titles, previous shell output and plain logs are not protected. Small participant counts can still allow inference from public chain data.</p>
       <p>The all-time cache is created and resumed automatically. Initial coverage is marked PARTIAL; COMPLETE is always through a stated block. Rankings count wallets, not people. Claimed rewards are not token balances. Statistics use limited background reads only while their page is open.</p>
       <h2>Options</h2>

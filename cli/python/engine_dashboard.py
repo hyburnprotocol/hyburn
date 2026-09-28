@@ -31,6 +31,7 @@ def hype(value):
 class EngineView:
     def __init__(self, dashboard, rpc):
         self.ui, self.rpc = dashboard, rpc
+        self.finish_callback = None
 
     def consume(self, line):
         if not line.startswith(PREFIX):
@@ -44,6 +45,7 @@ class EngineView:
                 self.ui.update(**{'Round (last read)': max(-1,(int(event['timestamp'])-int(event['genesis']))//int(event['duration'])),
                                   'Block (last read)':event['block']})
             elif kind=='meta':
+                self.ui.finish_callback = self.finish_callback
                 self.ui.update(Wallet=event['account'],Miner=event['miner'],Chain=event['chain'],
                                Mode='DRY RUN' if event['dry'] else 'LIVE',
                                **{'Token CA':event['token'],'Burn / round':hype(event['amount'])+' + gas',
@@ -120,6 +122,8 @@ def run_engine(command, args, engine):
         reader=threading.Thread(target=read,daemon=True)
         reader.start()
         view=EngineView(ui,rpc)
+        if hasattr(signal, "SIGUSR1"):
+            view.finish_callback = lambda: process.send_signal(signal.SIGUSR1) if process.poll() is None else None
         try:
             while process.poll() is None or not messages.empty() or not finished.is_set():
                 try:

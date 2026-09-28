@@ -13,6 +13,13 @@ K0=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 K1=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
 K2=0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a
 A1=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+# Independent public fixture wallets allow parallel local-chain checks without
+# weakening the real per-wallet process lock. Account 2 remains the competitor.
+if [ -n "${HYBURN_TEST_ACCOUNT_INDEX:-}" ]; then
+  case "$HYBURN_TEST_ACCOUNT_INDEX" in 3|4|5|6|7|8|9) ;; *) echo "Invalid test account index"; exit 1;; esac
+  K1=$(cast wallet private-key 'test test test test test test test test test test test junk' "$HYBURN_TEST_ACCOUNT_INDEX")
+  A1=$(cast wallet address --private-key "$K1")
+fi
 
 ANVIL=""
 MINING_PID=""
@@ -48,6 +55,7 @@ fail(){ echo "FAIL: $1"; exit 1; }
 pass(){ echo "ok   $1"; }
 
 echo "== conformance: ${CLI[*]}  (miner $MINER)"
+if [ "${HYBURN_SETTLEMENT_ONLY:-}" != 1 ]; then
 grep -q "not started" <<<"$("${CLI[@]}" status 2>&1)" && pass "status before genesis" || fail "status before genesis"
 "${CLI[@]}" burn 0.001 >/dev/null 2>&1 && fail "pre-genesis burn accepted" || pass "pre-genesis burn rejected"
 NOW=$(cast block latest --field timestamp --rpc-url "$RPC" | awk '{print $1}')
@@ -68,11 +76,59 @@ python3 -c "import json,sys; c=json.load(open(sys.argv[1])); e=c['rounds']['0'];
 grep -q "skipping" "$S/mineA.log" && pass "mine skips when cost above max-cost" || { cat "$S/mineA.log"; fail "max-cost skip"; }
 "${CLI[@]}" mine --new-session --amount 0.3 --at 90 --rounds 2 > "$S/mineB.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; to_window 90; sleep 35; stop_miner; sleep 1
 [ "$(grep -c "confirmed in block" "$S/mineB.log")" = "2" ] && pass "mine burns in two rounds" || { cat "$S/mineB.log"; fail "mine two rounds"; }
-grep -q "claiming 1 round" "$S/mineB.log" && pass "second burn claims the first round" || { cat "$S/mineB.log"; fail "auto-claim"; }
+grep -Eq "claiming .* from 1 round|claiming 1 round" "$S/mineB.log" && pass "first round is automatically claimed" || { cat "$S/mineB.log"; fail "auto-claim"; }
 grep -q "done: 2 round" "$S/mineB.log" && pass "mine stops after --rounds" || fail "--rounds stop"
 "${CLI[@]}" mine --new-session --amount 0.3 --at 90 --budget 0.5 > "$S/mineC.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; to_window 90; sleep 35; stop_miner; sleep 1
 [ "$(grep -c "confirmed in block" "$S/mineC.log")" = "1" ] && grep -q "budget reached" "$S/mineC.log" && pass "mine stops at budget after one burn" || { cat "$S/mineC.log"; fail "budget"; }
 BAL=$(cast call $(cast call $MINER "token()(address)" --rpc-url $RPC) "balanceOf(address)(uint256)" $A1 --rpc-url $RPC | awk '{print $1}')
 [ "$BAL" = "21679687500000" ] && pass "HYBURN balance 21,679.6875 after automatic final claim (rounds 0,1,2,3)" || fail "final balance $BAL"
 [ "$(grep -c "claimable\|claimed" <<<"$("${CLI[@]}" history 2>&1)")" = "4" ] && pass "history lists 4 rounds" || fail "history count"
+else
+  NOW=$(cast block latest --field timestamp --rpc-url "$RPC" | awk '{print $1}')
+  warp $(( GEN-NOW ))
+fi
+# Recovery must claim ended rewards even when max-cost prevents any new burn.
+RID=$(cast call "$MINER" "currentRoundId()(uint256)" --rpc-url "$RPC" | awk '{print $1}')
+"${CLI[@]}" burn 0.001 > "$S/recovery-burn.log" 2>&1
+warp 999
+"${CLI[@]}" mine --new-session --amount 0.001 --budget 0.01 --at 90 --max-cost 0.000000000000001 > "$S/recovery.log" 2>&1 & MINING_PID=$!
+for _ in $(seq 1 60); do
+  [ "$(cast call "$MINER" "claimed(uint256,address)(bool)" "$RID" "$A1" --rpc-url "$RPC")" = true ] && break
+  sleep 1
+done
+[ "$(cast call "$MINER" "claimed(uint256,address)(bool)" "$RID" "$A1" --rpc-url "$RPC")" = true ] && pass "startup claims without waiting for a burn" || { cat "$S/recovery.log"; fail "startup settlement"; }
+kill -USR1 "$MINING_PID"
+for _ in $(seq 1 45); do kill -0 "$MINING_PID" 2>/dev/null || break; sleep 1; done
+kill -0 "$MINING_PID" 2>/dev/null && fail "graceful finish did not exit"
+wait "$MINING_PID" || { cat "$S/recovery.log"; fail "graceful exit status"; }
+MINING_PID=""
+! grep -q "confirmed in block" "$S/recovery.log" && pass "graceful finish sends no extra burn" || fail "unexpected burn"
+# Finish an open round: start early so the fixture cannot burn before the time warp.
+NOW=$(cast block latest --field timestamp --rpc-url "$RPC" | awk '{print $1}')
+RID=$(( (NOW-GEN)/999 ))
+warp $(( GEN+(RID+1)*999+10-NOW ))
+"${CLI[@]}" mine --new-session --amount 0.001 --budget 0.01 --max-cost 1 --at 90 > "$S/finish.log" 2>&1 & MINING_PID=$!
+sleep 2; to_window 90
+for _ in $(seq 1 45); do grep -q "confirmed in block" "$S/finish.log" && break; sleep 1; done
+grep -q "confirmed in block" "$S/finish.log" || { cat "$S/finish.log"; fail "finish fixture burn"; }
+RID=$(cast call "$MINER" "currentRoundId()(uint256)" --rpc-url "$RPC" | awk '{print $1}')
+kill -USR1 "$MINING_PID"
+for _ in $(seq 1 40); do grep -q 'Finishing; waiting to claim final rewards' "$S/finish.log" && break; sleep 1; done
+kill -0 "$MINING_PID" || fail "finish exited before round end"
+grep -q 'Finishing; waiting to claim final rewards' "$S/finish.log" || fail "finish mode not reached"
+# Interrupt settlement and restart: durable finish intent must prevent new burns.
+kill -INT "$MINING_PID"
+for _ in $(seq 1 15); do kill -0 "$MINING_PID" 2>/dev/null || break; sleep 1; done
+kill -0 "$MINING_PID" 2>/dev/null && fail "immediate stop did not exit"
+wait "$MINING_PID" || true
+MINING_PID=""
+"${CLI[@]}" mine > "$S/finish-resume.log" 2>&1 & MINING_PID=$!
+sleep 2
+warp 999
+for _ in $(seq 1 60); do kill -0 "$MINING_PID" 2>/dev/null || break; sleep 1; done
+kill -0 "$MINING_PID" 2>/dev/null && fail "final settlement did not exit"
+wait "$MINING_PID" || { cat "$S/finish.log"; fail "final settlement exit status"; }
+MINING_PID=""
+[ "$(cast call "$MINER" "claimed(uint256,address)(bool)" "$RID" "$A1" --rpc-url "$RPC")" = true ] && pass "finish claims the last open round" || fail "final claim missing"
+[ "$(grep -c 'confirmed in block' "$S/finish.log")" = 1 ] && ! grep -q 'confirmed in block' "$S/finish-resume.log" && pass "finish does not burn in the next round" || fail "extra burn after finish"
 echo "== all checks passed"

@@ -29,6 +29,8 @@ pub struct State {
     pub burns: u64,
     pub last_round: i64,
     pub pending: Option<Pending>,
+    #[serde(default)]
+    pub finishing: bool,
 }
 pub struct Session {
     pub state: State,
@@ -95,6 +97,7 @@ impl Session {
                 gas: "0".into(),
                 burns: 0,
                 last_round: -1,
+                finishing: false,
                 pending: None,
             }
         };
@@ -169,6 +172,7 @@ impl Session {
             self.state.spent = "0".into();
             self.state.gas = "0".into();
             self.state.burns = 0;
+            self.state.finishing = false;
         }
         self.state.settings = settings.clone();
         self.save()?;

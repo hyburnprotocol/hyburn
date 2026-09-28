@@ -289,6 +289,9 @@ class Hyburn:
             return None
         if getattr(self, "should_stop", lambda: False)():
             raise SystemExit("Stopped before signing; session preserved.")
+        if value and getattr(self, "finish_requested", lambda: False)():
+            log("Finishing: new burn cancelled before signing.")
+            return None
         signed = acct.sign_transaction(tx)
         rid = int(fn.args[0]) if value else -1
         self.session.prepare(signed.raw_transaction, value, rid, getattr(self, 'mining', False))
@@ -420,6 +423,10 @@ def cmd_mine(hb: Hyburn, args) -> None:
     if amount < hb.min_burn:
         raise SystemExit(f"--amount below minimum {fmt_hype(hb.min_burn, 6)} HYPE")
     stop = {"flag": False}
+    finish = {"flag": False if args.dry_run else hb.session.state.get("finishing", False)}
+    hb.finish_requested = lambda: finish["flag"]
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, lambda *_: finish.__setitem__("flag", True))
     hb.should_stop = lambda: stop["flag"]
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
     log(f"mining as {hb.account.address}: {fmt_hype(amount)} HYPE per round, send {args.at}s before round end"
@@ -441,8 +448,12 @@ def cmd_mine(hb: Hyburn, args) -> None:
         dashboard.attach_insights(rpc=args.rpc, chain=hb.chain_id, miner=hb.miner_addr,
                                   account=hb.account.address, genesis=hb.genesis, duration=hb.dur,
                                   deploy_block=hb.deploy_block, send_window=args.at)
+    if dashboard:
+        dashboard.finish_callback = lambda: finish.__setitem__("flag", True)
+    log("Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.")
+    checked_round = None
     last_round = hb.session.state['last_round'] if not args.dry_run else -1
-    while not stop["flag"]:
+    while not stop["flag"] and not finish["flag"]:
         if budget is not None and spent + amount > budget:
             log(f"budget reached ({fmt_hype(spent)} of {fmt_hype(budget)} HYPE); stopping")
             break
@@ -452,6 +463,10 @@ def cmd_mine(hb: Hyburn, args) -> None:
         hb.sync_time()
         t = hb.now()
         rid = hb.round_of(t)
+        if not args.dry_run and checked_round != rid:
+            log("Checking ended rewards; automatic claim (gas applies).")
+            cmd_claim(hb, args)
+            checked_round = rid
         if dashboard:
             dashboard.update(**{'Round (last read)': rid, 'Block (last read)': hb.latest_block})
         if rid < 0:
@@ -497,15 +512,19 @@ def cmd_mine(hb: Hyburn, args) -> None:
             log(f"stopped: {e}")
             raise
     if not args.dry_run and not stop['flag']:
+        hb.session.state['finishing'] = True
+        hb.session.save()
         final_round = hb.session.state['last_round']
         while final_round >= 0 and not stop['flag']:
             hb.sync_time()
             left = hb.round_end(final_round) - hb.now()
             if left <= 0:
                 break
-            wait_local(left, 'Budget complete; waiting to claim final rewards', stop)
+            wait_local(left, 'Finishing; waiting to claim final rewards', stop)
         if not stop['flag']:
             cmd_claim(hb, args)
+            hb.session.state['finishing'] = False
+            hb.session.save()
     log(f"mining stopped. burned {fmt_hype(spent)} HYPE in {burns} round(s)")
 
 def main() -> None:

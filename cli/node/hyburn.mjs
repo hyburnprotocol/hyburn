@@ -228,6 +228,7 @@ class Hyburn {
     const request = await c[fnName].populateTransaction(...args, { value, gasLimit: gas, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip });
     Object.assign(request, {chainId:this.chainId, nonce:await this.provider.getTransactionCount(from, 'latest'), type:2});
     if (this.shouldStop?.()) throw new Error("Stopped before signing; session preserved.");
+    if (value && this.finishRequested?.()) { log("Finishing: new burn cancelled before signing."); return null; }
     const raw = await this.account.signTransaction(request);
     this.session.prepare(raw, value, value ? Number(args[0]) : -1, this.mining ?? false);
     const tx = await this.provider.broadcastTransaction(raw);
@@ -346,6 +347,9 @@ async function cmdMine(hb, o) {
   const at = Number(settings.at); o.rounds = Number(settings.rounds);
   if (!Number.isInteger(at) || at <= 0 || at >= Number(hb.dur) || (settings.rounds && (!Number.isInteger(o.rounds) || o.rounds<=0))) throw new Error('--at must be within the round; --rounds must be positive');
   let spent = o.dryRun ? 0n : BigInt(hb.session.state.spent), burns = o.dryRun ? 0 : hb.session.state.burns, stop = false, lastRound = o.dryRun ? -1 : hb.session.state.last_round;
+  let finish = o.dryRun ? false : (hb.session.state.finishing ?? false), checkedRound = null;
+  hb.finishRequested = () => finish;
+  process.on("SIGUSR1", () => { finish = true; });
   hb.shouldStop = () => stop;
   process.on("SIGINT", () => { stop = true; });
   log(`mining as ${hb.account.address}: ${fmtHype(amount)} HYPE per round, send ${at}s before round end`
@@ -354,12 +358,14 @@ async function cmdMine(hb, o) {
     genesis:Number(hb.genesis),duration:Number(hb.dur),deploy:hb.deployBlock,at,amount:amount.toString(),
     budget:budget?.toString() ?? '',reserve:(hb.reserve ?? 0n).toString(),dry:o.dryRun});
   const usage=()=>uiEvent({type:"usage",spent:spent.toString(),burns,gas:o.dryRun?'0':hb.session.state.gas});
-  while (!stop) {
+  log("Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.");
+  while (!stop && !finish) {
     usage();
     if (budget !== null && spent + amount > budget) { log(`budget reached (${fmtHype(spent)} of ${fmtHype(budget)} HYPE); stopping`); break; }
     if (o.rounds && burns >= o.rounds) { log(`done: ${burns} round(s)`); break; }
     await hb.syncTime();
     const t = hb.now(), rid = hb.roundOf(t);
+    if (!o.dryRun && checkedRound !== rid) { await cmdClaim(hb,o); checkedRound = rid; }
     if (rid < 0) { log(`not started; round 0 opens in ${fmtClock(Number(hb.genesis) - t)}`); await waitLocal(Math.max(1, Number(hb.genesis) - t), "Waiting for genesis", () => stop); continue; }
     if (rid === lastRound) { await waitLocal(Math.max(0.5, hb.roundEnd(rid) - t + 1), `Next round ${rid + 1}`, () => stop); continue; }
     const sendAt = hb.roundEnd(rid) - at;
@@ -376,12 +382,13 @@ async function cmdMine(hb, o) {
     }
   }
   if (!o.dryRun && !stop) {
+    hb.session.state.finishing = true; hb.session.save();
     const finalRound = hb.session.state.last_round;
     while (finalRound >= 0 && !stop) {
       await hb.syncTime(); const left=hb.roundEnd(finalRound)-hb.now(); if (left<=0) break;
-      await waitLocal(left, 'Budget complete; waiting to claim final rewards', () => stop);
+      await waitLocal(left, 'Finishing; waiting to claim final rewards', () => stop);
     }
-    if (!stop) await cmdClaim(hb,o);
+    if (!stop) { await cmdClaim(hb,o); hb.session.state.finishing = false; hb.session.save(); }
   }
   usage();
   log(`mining stopped. burned ${fmtHype(spent)} HYPE in ${burns} round(s)`);

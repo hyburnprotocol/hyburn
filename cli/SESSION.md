@@ -39,7 +39,7 @@ cli/rust/target/release/hyburn mine
 
 Choose S to start (Q exits), then enter the keystore password if requested.
 Unattended execution requires `--yes` before `mine`. Keep the computer awake and the process
-running. Timing, earlier-round claims and session saving are automatic. On reaching
+running. Timing, ended-round claims and session saving are automatic. On reaching
 the budget or round limit, the miner waits for the last round to close and claims
 its remaining rewards automatically. This may take up to one round. Ctrl-C skips
 that remaining work; the next `mine` resumes it. You can also run `claim` directly.
@@ -102,3 +102,30 @@ remove session files to resolve errors; retain them when backing up or moving a
 miner. Older CLI versions do not understand these journals or locks; stop them
 and upgrade before using the new session workflow. Historical burns made before
 the journal existed are not retroactively charged to the new budget.
+
+## Automatic reward settlement
+
+After you authorize mining, the miner checks and claims ended rewards on startup
+and once per observed round, even when a price limit skips a burn. Claims use gas
+in addition to the burn budget. No claim is sent when nothing is claimable.
+Opening the menu, cancelling the start prompt, status/history and dry runs do not
+send claims. Pending transactions must be recovered before any new submission.
+
+Press **Shift-F** (`F`) in the mining dashboard to finish: stop new burns, wait for
+the last mined round to end, claim rewards, then exit. Keep the process running
+and the computer awake. The finish request can take up to 30 seconds to leave a
+local wait. Lowercase `f` still filters claim status in tables.
+**Ctrl-C exits immediately** and leaves unfinished claims for the next mining
+start. Already submitted transactions may still confirm. In a plain POSIX
+terminal, `kill -USR1 <miner-pid>` requests the same graceful finish.
+
+If gas, RPC access or a configured spending cap prevents settlement, the miner
+stops with an error; rewards remain claimable. Restart with the same session after
+resolving the issue. Nothing runs after the program exits.
+
+An interrupted final settlement is saved as `finishing` in the shared journal.
+The next mining start completes settlement and exits without starting new burns.
+Run `mine` again after settlement if you want to resume an unspent budget.
+
+An explicitly authorized `--new-session` resets the finish intent together with
+the burn budget. It does not discard pending transaction recovery or past rewards.

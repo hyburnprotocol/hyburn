@@ -30,6 +30,7 @@ type sessionState struct {
 	Gas       string            `json:"gas"`
 	Burns     int64             `json:"burns"`
 	LastRound int64             `json:"last_round"`
+	Finishing bool              `json:"finishing"`
 	Pending   *pendingTx        `json:"pending"`
 }
 type Session struct {
@@ -178,6 +179,7 @@ func (s *Session) configure(supplied map[string]string, fresh bool) map[string]s
 		s.state.Spent = "0"
 		s.state.Gas = "0"
 		s.state.Burns = 0
+		s.state.Finishing = false
 	}
 	s.state.Settings = settings
 	s.save()

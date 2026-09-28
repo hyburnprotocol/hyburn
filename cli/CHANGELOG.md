@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Automatically claim ended mining rewards at startup and on round changes in
+  Python, Node.js, Go and Rust, even if a cost limit skips the next burn. Claims
+  consume gas separately from the burn budget.
+- Add Shift-F to finish mining, wait for the last round, claim and exit. Ctrl-C
+  remains immediate; saved transactions and rewards recover on restart.
+- Align the developer console with final settlement and durable claim receipts.
+
 - Add a shared `./hyburn` control center and public wallet-owned liquidity menu.
 - Manage positions in the existing Project X HYBURN/WHYPE 0.3% pool, with local
   fork previews, explicit signing and separate per-wallet records and budgets.

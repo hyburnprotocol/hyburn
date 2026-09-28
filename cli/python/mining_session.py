@@ -59,7 +59,8 @@ class Session:
                         and int(saved['spent']) >= 0 and int(saved['gas']) >= 0
                         and type(saved['burns']) is int and saved['burns'] >= 0
                         and type(saved['last_round']) is int and saved['last_round'] >= -1
-                        and 'pending' in saved):
+                        and 'pending' in saved
+                        and isinstance(saved.get('finishing', False), bool)):
                     raise ValueError('Invalid session schema')
                 self.state = saved
             except Exception:
@@ -96,7 +97,7 @@ class Session:
             raise SystemExit('Saved mining settings differ. Use --new-session with the full new settings to authorize a new budget.')
         if fresh:
             atomic_json(self.path.with_suffix('.previous.json'), self.state)
-            self.state.update(spent='0', gas='0', burns=0)
+            self.state.update(spent='0', gas='0', burns=0, finishing=False)
         self.state['settings'] = settings
         self.save()
         return settings

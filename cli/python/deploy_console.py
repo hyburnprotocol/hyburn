@@ -11,6 +11,7 @@ import subprocess
 import time
 import sys
 import threading
+import signal
 from contextlib import contextmanager, nullcontext
 import terminal_ui
 from mining_session import wallet_lock
@@ -106,15 +107,15 @@ class ResilientHTTPProvider(Web3.HTTPProvider):
             wait_locally(delay, 'RPC retry; no transaction resent')
 
 
-def wait_locally(seconds, label='Waiting locally; no RPC requests'):
+def wait_locally(seconds, label='Waiting locally; no RPC requests', should_finish=None):
     """Monotonic countdown; animation never increases RPC traffic."""
     deadline = time.monotonic() + max(0, seconds)
     with activity(lambda: f'{label} | ~{max(0, int(deadline - time.monotonic()))}s remaining | Ctrl-C to stop'):
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if remaining <= 0 or (should_finish and should_finish()):
                 return
-            time.sleep(min(60, remaining))
+            time.sleep(min(0.5 if should_finish else 60, remaining))
 
 
 def read_local_config(path=CONFIG_PATH):
@@ -339,6 +340,7 @@ class Console:
                 self.state['deploy_tx'] = pending['hash']
             elif pending['kind'] == 'burn':
                 self.state['rounds'].append(pending['round'])
+            if pending['kind'] in ('burn', 'claim'):
                 known = set(self.state.get('claimed_rounds', []))
                 known.update(pending.get('claims', []))
                 self.state['claimed_rounds'] = sorted(known)
@@ -370,6 +372,9 @@ class Console:
                           tx['gas'], tx['maxFeePerGas'], self.state['reserve']):
             print('STOP: remaining cap/balance cannot cover value + maximum gas + reserve.', flush=True)
             return False
+        if kind == "burn" and getattr(self, "finish_requested", False):
+            print("Finishing: new burn cancelled before signing.")
+            return None
         signed = self.account.sign_transaction(tx)
         tx_hash = Web3.to_hex(signed.hash)
         # Persist before broadcasting: even a timeout/crash cannot silently repeat a burn.
@@ -425,6 +430,29 @@ class Console:
                 unclaimed.append(rid)
         return unclaimed
 
+    def claim_ended(self, miner, candidates, current_round):
+        ended = [r for r in candidates if r < current_round]
+        for start in range(0, len(ended), 200):
+            batch = ended[start:start + 200]
+            # Another CLI may have claimed since this console last ran.
+            batch = [r for r in batch if not miner.functions.claimed(r, self.address).call()]
+            if batch and not self.send(miner.functions.claimMany(batch, self.address), 'claim', claims=batch):
+                raise RuntimeError('Final claim needs more gas within the configured cap/reserve. Rewards remain claimable; restart after reviewing the budget.')
+        return [r for r in candidates if r >= current_round]
+
+    def finish_claims(self, miner, candidates, genesis):
+        self.state['finishing'] = True
+        self.save()
+        print('Finishing: no new burns. Waiting for ended rewards; Ctrl-C exits immediately.')
+        while candidates:
+            now = self.w3.eth.get_block('latest')['timestamp']
+            candidates = self.claim_ended(miner, candidates, (now - genesis) // 999)
+            if candidates:
+                wait_locally(max(1, genesis + (max(candidates) + 1) * 999 - now), 'Finishing; waiting to claim final rewards')
+        self.state['finishing'] = False
+        self.save()
+        print('Final rewards claimed. No further burns will be sent.')
+
     def run(self):
         self.screen('READ-ONLY PREVIEW' if not self.args.execute else 'PREPARING')
         if not self.args.execute:
@@ -433,12 +461,21 @@ class Console:
                 print(f"Deployment maximum gas cost: {hype(tx['gas'] * tx['maxFeePerGas'])} HYPE")
             print('No transaction sent. Fill private_key in the local JSON, then use --execute.')
             return
+        if terminal_ui.current():
+            terminal_ui.current().update(**{'Reward claims': 'Automatic after start; claim gas counts toward cap'})
         label = 'Resume mining' if self.state and self.state.get('miner') else 'Deploy contracts and start mining'
         if not terminal_ui.choose_start(getattr(self.args, 'yes', False), label):
             print('Execution cancelled. No new transactions sent.')
             return
         if terminal_ui.current():
             terminal_ui.current().update(Mode="LIVE")
+        self.finish_requested = bool(self.state and self.state.get("finishing"))
+        def finish(*_):
+            self.finish_requested = True
+        if hasattr(signal, 'SIGUSR1'):
+            signal.signal(signal.SIGUSR1, finish)
+        if terminal_ui.current():
+            terminal_ui.current().finish_callback = finish
         ensure_config_untracked()
         self.account = load_signer(self.address, self.args.keystore)
         if not self.state:
@@ -486,7 +523,12 @@ class Console:
                                       genesis=genesis, duration=999, deploy_block=self.state['deploy_block'],
                                       send_window=0)
         claim_candidates = self.unclaimed_rounds(miner)
+        print('Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.')
+        checked_round = None
         while True:
+            if self.finish_requested:
+                self.finish_claims(miner, claim_candidates, genesis)
+                return
             now = self.w3.eth.get_block('latest')['timestamp']
             dashboard = terminal_ui.current()
             if dashboard:
@@ -494,19 +536,25 @@ class Console:
             if now < genesis:
                 delay = max(1, genesis - now)
                 print(f'Genesis in {delay}s. Local wait; no background RPC polling.', flush=True)
-                wait_locally(delay, 'Waiting for genesis')
+                wait_locally(delay, 'Waiting for genesis', lambda: self.finish_requested)
                 continue
             rid = (now - genesis) // 999
+            if checked_round != rid:
+                claim_candidates = self.claim_ended(miner, claim_candidates, rid)
+                checked_round = rid
+            if self.finish_requested:
+                continue
             if rid not in self.state['rounds'] and miner.functions.burned(rid, self.address).call() == 0:
                 if miner.functions.miningFinished().call():
                     print('Mining schedule complete.')
+                    self.finish_claims(miner, claim_candidates, genesis)
                     return
                 claims = [r for r in claim_candidates if r < rid]
                 sent = self.send(miner.functions.burnAndClaim(rid, claims), 'burn', MIN_BURN, rid, claims)
                 if sent is None:
                     continue
                 if not sent:
-                    print('Unclaimed rewards remain available via the standard CLI.')
+                    self.finish_claims(miner, claim_candidates, genesis)
                     return
                 claim_candidates = [rid]
                 self.screen(f'ROUND {rid} CONFIRMED')
@@ -517,7 +565,7 @@ class Console:
             target = genesis + (rid + 1) * 999
             delay = max(1, target - chain_now)
             print(f'Next burn: round {rid + 1}, about {delay}s. Sleeping locally; Ctrl-C to stop.', flush=True)
-            wait_locally(delay, f'Next burn: round {rid + 1}; no RPC requests')
+            wait_locally(delay, f'Next burn: round {rid + 1}; no RPC requests', lambda: self.finish_requested)
 
 
 def main():

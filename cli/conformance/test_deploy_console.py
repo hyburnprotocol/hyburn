@@ -153,7 +153,49 @@ class ClaimJournalTests(unittest.TestCase):
                     c.settle()
                 self.assertEqual(c.state['claimed_rounds'], [0])
 
+    def test_standalone_claim_receipt_preserves_burn_count(self):
+        c = self.console()
+        c.state['pending'] = dict(hash='claim', kind='claim', value=0, round=None, claims=[1])
+        c.w3 = MagicMock()
+        c.w3.eth.get_transaction_receipt.return_value = dict(status=1, gasUsed=100, effectiveGasPrice=2)
+        c.settle()
+        self.assertEqual(c.state['rounds'], [0, 1, 2])
+        self.assertEqual(c.state['claimed_rounds'], [0, 1])
+        self.assertEqual(c.state['spent'], 200)
+
+    def test_claim_ended_never_submits_current_round(self):
+        c = self.console()
+        miner = MagicMock()
+        miner.functions.claimed.return_value.call.return_value = False
+        c.send = MagicMock(return_value=True)
+        self.assertEqual(c.claim_ended(miner, [1, 2], 2), [2])
+        c.send.assert_called_once()
+        self.assertEqual(c.send.call_args.kwargs['claims'], [1])
+
+    def test_claim_failure_leaves_recovery_visible(self):
+        c = self.console()
+        miner = MagicMock()
+        miner.functions.claimed.return_value.call.return_value = False
+        c.send = MagicMock(return_value=False)
+        with self.assertRaisesRegex(RuntimeError, 'Rewards remain claimable'):
+            c.claim_ended(miner, [1], 2)
+
 class DashboardTests(unittest.TestCase):
+    def test_finish_is_explicit_uppercase_and_one_shot(self):
+        d = console.terminal_ui.Dashboard(False)
+        finish = MagicMock()
+        d.finish_callback = finish
+        d.awaiting_start = True
+        d.handle_key('F')
+        finish.assert_not_called()
+        d.awaiting_start = False
+        d.handle_key('f')
+        finish.assert_not_called()
+        d.handle_key('F')
+        d.handle_key('F')
+        finish.assert_called_once()
+        self.assertIn('FINISHING', d.fields['Mode'])
+
     def test_restores_terminal_on_exception_and_does_not_call_rpc(self):
         output = io.StringIO()
         output.isatty = lambda: True

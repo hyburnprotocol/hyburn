@@ -149,3 +149,27 @@ Choose an engine, connect a wallet, or open the mining dashboard from the menu.
 The dashboard still asks before starting mining. The pool overview is read-only
 and requires no wallet. Creating or managing liquidity is separate from mining;
 never assume the mining spending budget covers liquidity deposits.
+
+## Automatic reward settlement
+
+After you authorize mining, the miner checks and claims ended rewards on startup
+and once per observed round, even when a price limit skips a burn. Claims use gas
+in addition to the burn budget. No claim is sent when nothing is claimable.
+Opening the menu, cancelling the start prompt, status/history and dry runs do not
+send claims. Pending transactions must be recovered before any new submission.
+
+Press **Shift-F** (`F`) in the mining dashboard to finish: stop new burns, wait for
+the last mined round to end, claim rewards, then exit. Keep the process running
+and the computer awake. The finish request can take up to 30 seconds to leave a
+local wait. Lowercase `f` still filters claim status in tables.
+**Ctrl-C exits immediately** and leaves unfinished claims for the next mining
+start. Already submitted transactions may still confirm. In a plain POSIX
+terminal, `kill -USR1 <miner-pid>` requests the same graceful finish.
+
+If gas, RPC access or a configured spending cap prevents settlement, the miner
+stops with an error; rewards remain claimable. Restart with the same session after
+resolving the issue. Nothing runs after the program exits.
+
+An interrupted final settlement is saved as `finishing` in the shared journal.
+The next mining start completes settlement and exits without starting new burns.
+Run `mine` again after settlement if you want to resume an unspent budget.

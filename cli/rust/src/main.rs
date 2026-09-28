@@ -113,6 +113,7 @@ type P = alloy::providers::fillers::FillProvider<
 
 struct Hyburn {
     stop:Option<Arc<AtomicBool>>,
+    finish:Option<Arc<AtomicBool>>,
     session: std::cell::RefCell<Option<Session>>,
     mining: bool,
     reserve: U256,
@@ -159,7 +160,7 @@ impl Hyburn {
             halving: m.HALVING_INTERVAL().call().await?,
             terminal: m.TERMINAL_SEQUENCE().call().await?,
             remainder: m.TERMINAL_REMAINDER().call().await?,
-            stop:None, session: Default::default(), mining:false, reserve:U256::ZERO, provider, miner: m, token, miner_addr, chain_id, deploy_block, signer: None, offset: 0.0, latest_block: 0, caches: Default::default(),
+            stop:None, finish:None, session: Default::default(), mining:false, reserve:U256::ZERO, provider, miner: m, token, miner_addr, chain_id, deploy_block, signer: None, offset: 0.0, latest_block: 0, caches: Default::default(),
         };
         h.sync_time().await?;
         Ok(h)
@@ -319,6 +320,7 @@ impl Hyburn {
             if input.len()<36 {bail!("Invalid burn calldata")};U256::from_be_slice(&input[4..36]).to::<u64>() as i64
         };
         if self.stop.as_ref().is_some_and(|s|s.load(Ordering::SeqCst)){bail!("Stopped before signing; session preserved.")}
+        if !value.is_zero() && self.finish.as_ref().is_some_and(|s|s.load(Ordering::SeqCst)){log("Finishing: new burn cancelled before signing.");return Ok(None)}
         let wallet = EthereumWallet::from(self.signer.clone().unwrap());
         let envelope = tx.build(&wallet).await?;
         self.session.borrow_mut().as_mut().unwrap().prepare(envelope.encoded_2718(),value,rid,self.mining)?;
@@ -464,6 +466,11 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
     if at==0 || at>=h.dur || rounds==Some(0){bail!("--at must be within the round; --rounds must be positive")}
     let stop = Arc::new(AtomicBool::new(false));
     h.stop=Some(stop.clone());
+    let finish = Arc::new(AtomicBool::new(!dry_run && h.session.borrow().as_ref().unwrap().state.finishing));
+    h.finish=Some(finish.clone());
+    #[cfg(unix)]
+    { let f=finish.clone(); let mut signal=tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
+      tokio::spawn(async move {signal.recv().await; f.store(true,Ordering::SeqCst);}); }
     { let s = stop.clone(); tokio::spawn(async move { let _ = tokio::signal::ctrl_c().await; s.store(true, Ordering::SeqCst); }); }
     let mut desc = format!("mining as {:?}: {} HYPE per round, send {at}s before round end", h.address(), fmt_hype(amount, 4));
     if let Some(m) = max_cost { desc += &format!(", max cost {} HYPE/HYBURN", fmt_hype(m, 6)); }
@@ -474,13 +481,16 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
     if !dry_run {let state=h.session.borrow().as_ref().unwrap().state.clone();spent=state.spent.parse()?;burns=state.burns;last_round=state.last_round;}
     let one_token = U256::from(10u64).pow(U256::from(9u64));
     tui::event(json!({"type":"meta","chain":h.chain_id,"miner":format!("{:?}",h.miner_addr),"token":format!("{:?}",h.token.address()),"account":format!("{:?}",h.address()),"genesis":h.genesis,"duration":h.dur,"deploy":h.deploy_block,"at":at,"amount":amount.to_string(),"budget":budget.map(|b|b.to_string()).unwrap_or_default(),"reserve":h.reserve.to_string(),"dry":dry_run}));
-    while !stop.load(Ordering::SeqCst) {
+    let mut checked_round = None;
+    log("Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.");
+    while !stop.load(Ordering::SeqCst) && !finish.load(Ordering::SeqCst) {
         tui::event(json!({"type":"usage","spent":spent.to_string(),"burns":burns,"gas":if dry_run{"0".to_string()}else{h.session.borrow().as_ref().unwrap().state.gas.clone()}}));
         if budget.is_some_and(|b|spent+amount>b){log(&format!("budget reached ({} of {} HYPE); stopping",fmt_hype(spent,4),fmt_hype(budget.unwrap(),4)));break}
         if rounds.is_some_and(|n|burns>=n){log(&format!("done: {burns} round(s)"));break}
         h.sync_time().await?;
         let t = h.now();
         let rid = h.round_of(t);
+        if !dry_run && checked_round != Some(rid) {cmd_claim(h,false).await?; checked_round=Some(rid);}
         if rid < 0 {
             log(&format!("not started; round 0 opens in {}", fmt_clock(h.genesis as f64 - t)));
             wait_local((h.genesis as f64 - t).max(1.0), "Waiting for genesis", &stop).await;
@@ -519,9 +529,10 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
         }
     }
     if !dry_run && !stop.load(Ordering::SeqCst) {
+        {let mut session=h.session.borrow_mut();let s=session.as_mut().unwrap();s.state.finishing=true;s.save()?;}
         let final_round=h.session.borrow().as_ref().unwrap().state.last_round;
-        while final_round>=0 && !stop.load(Ordering::SeqCst){h.sync_time().await?;let left=h.round_end(final_round as u64) as f64-h.now();if left<=0.0{break}wait_local(left,"Budget complete; waiting to claim final rewards",&stop).await;}
-        if !stop.load(Ordering::SeqCst){cmd_claim(h,false).await?;}
+        while final_round>=0 && !stop.load(Ordering::SeqCst){h.sync_time().await?;let left=h.round_end(final_round as u64) as f64-h.now();if left<=0.0{break}wait_local(left,"Finishing; waiting to claim final rewards",&stop).await;}
+        if !stop.load(Ordering::SeqCst){cmd_claim(h,false).await?;let mut session=h.session.borrow_mut();let s=session.as_mut().unwrap();s.state.finishing=false;s.save()?;}
     }
     tui::event(json!({"type":"usage","spent":spent.to_string(),"burns":burns,"gas":if dry_run{"0".to_string()}else{h.session.borrow().as_ref().unwrap().state.gas.clone()}}));
     log(&format!("mining stopped. burned {} HYPE in {burns} round(s)", fmt_hype(spent, 4)));

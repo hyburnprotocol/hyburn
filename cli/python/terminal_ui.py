@@ -70,7 +70,7 @@ def choose_start(auto_start=False, label='Start mining'):
     with context:
         try:
             if ui:
-                for key in ('Requested burn', 'Requested budget', 'Requested reserve', 'Session action'):
+                for key in ('Requested burn', 'Requested budget', 'Requested reserve', 'Reward claims', 'Session action'):
                     if key in ui.fields:
                         print(f'{key}: {ui.fields[key]}')
             print('Burns are irreversible. Gas is extra. Resume keeps the saved budget.')
@@ -92,6 +92,7 @@ def preview_start(ui, args):
                  'Requested burn': option('--amount', 'Saved value (required on first run)'),
                  'Requested budget': option('--budget', 'Saved value / --rounds limit'),
                  'Requested reserve': option('--reserve', 'Saved value / default 0.001 HYPE'),
+                 'Reward claims': 'Automatic after start; claim gas is extra',
                  'Session action': 'NEW budget requested' if '--new-session' in args else 'Resume saved budget, or create first session'})
 
 
@@ -224,6 +225,11 @@ class Dashboard:
             if table and table.editing is not None:
                 table.handle(key)
                 return
+            if key == 'F' and not self.awaiting_start and getattr(self, 'finish_callback', None):
+                self.finish_callback()
+                self.fields['Mode'] = 'FINISHING - no new burns; waiting for final claim'
+                self.finish_callback = None
+                return
             if key == 'v':
                 self.privacy = not self.privacy
                 return
@@ -308,7 +314,7 @@ class Dashboard:
                     rows = ['Burns are irreversible. Transaction gas is extra.',
                             'Requested HYPE settings; validated after unlocking.',
                             *[f'{key}: {self.display_field(key,self.fields[key])}' for key in
-                              ('Requested burn','Requested budget','Requested reserve','Session action') if key in self.fields],
+                              ('Requested burn','Requested budget','Requested reserve','Reward claims','Session action') if key in self.fields],
                             'First burn normally waits until 30s before round end.',
                             'S: continue and unlock wallet. Q: exit without mining.']
                     lines += self.box('BEFORE YOU START', rows, width, space)
@@ -373,14 +379,14 @@ class Dashboard:
                         'v privacy: public totals only; hides personal rows/logs.',
                         'Privacy does not hide window titles or shell scrollback.',
                         'Tab: next page. j/k or arrows: scroll. g: reset scroll.',
-                        'Ctrl-C: stop mining; already sent transactions may confirm.',
+                        'F: finish and claim (gas applies); Ctrl-C: stop immediately.',
                         'Navigation never sends transactions or changes spending.',
                         'Countdowns are local estimates, not chain confirmations.',
                         'Balances and round data update only when the miner reads them.',
                         'Use --plain for persistent line-by-line logs.',
                         'Keep enough native HYPE for claim gas after your final round.']
                 lines += self.box('HELP', rows, width, space)
-            lines += ['S: START   Q: EXIT   (no new submissions until start)' if self.awaiting_start else 'Tab: next  r: refresh  p: stats pause  v: privacy  ?: help  Ctrl-C: stop']
+            lines += ['S: START   Q: EXIT   (no new submissions until start)' if self.awaiting_start else 'Tab: tabs  r: refresh  p: stats  v: privacy  ?: help  F: finish  Ctrl-C: exit']
             return '\n'.join(line[:width] for line in lines[:height])
 
     def styled_frame(self, width, height):

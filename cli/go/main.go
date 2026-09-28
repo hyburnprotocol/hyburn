@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -145,6 +146,7 @@ func logf(format string, a ...any) {
 func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(1) }
 
 type Hyburn struct {
+	finish      atomic.Bool
 	stop        <-chan os.Signal
 	session     *Session
 	mining      bool
@@ -509,6 +511,10 @@ func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (
 		default:
 		}
 	}
+	if value.Sign() > 0 && h.finish.Load() {
+		logf("Finishing: new burn cancelled before signing.")
+		return nil, nil
+	}
 	signed, err := types.SignTx(tx, types.LatestSignerForChainID(h.chainID), h.key)
 	if err != nil {
 		die("sign: " + err.Error())
@@ -798,7 +804,23 @@ func cmdMine(h *Hyburn, o opts) {
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
+	if session != nil {
+		h.finish.Store(session.state.Finishing)
+	}
 	h.stop = stop
+	finishSignal := make(chan os.Signal, 1)
+	signal.Notify(finishSignal, syscall.SIGUSR1)
+	finished := make(chan struct{})
+	defer close(finished)
+	defer signal.Stop(finishSignal)
+	defer signal.Stop(stop)
+	go func() {
+		select {
+		case <-finishSignal:
+			h.finish.Store(true)
+		case <-finished:
+		}
+	}()
 	desc := fmt.Sprintf("mining as %s: %s HYPE per round, send %ds before round end", h.address.Hex(), fmtHype(amount, 4), o.at)
 	if maxCost != nil {
 		desc += fmt.Sprintf(", max cost %s HYPE/HYBURN", fmtHype(maxCost, 6))
@@ -832,8 +854,10 @@ func cmdMine(h *Hyburn, o opts) {
 	}
 	defer usage()
 	stopped := false
+	checkedRound := int64(-2)
+	logf("Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.")
 loop:
-	for !stopped {
+	for !stopped && !h.finish.Load() {
 		usage()
 		if budget != nil && new(big.Int).Add(spent, amount).Cmp(budget) > 0 {
 			logf("budget reached (%s of %s HYPE); stopping", fmtHype(spent, 4), fmtHype(budget, 4))
@@ -852,6 +876,10 @@ loop:
 		h.syncTime()
 		t := h.now()
 		rid := h.roundOf(t)
+		if !o.dryRun && checkedRound != rid {
+			cmdClaim(h, o)
+			checkedRound = rid
+		}
 		if rid < 0 {
 			logf("not started; round 0 opens in %s", fmtClock(float64(h.genesis)-t))
 			stopped = waitLocal(max(1, float64(h.genesis)-t), "Waiting for genesis", stop)
@@ -900,6 +928,8 @@ loop:
 		}
 	}
 	if !o.dryRun && !stopped {
+		h.session.state.Finishing = true
+		h.session.save()
 		finalRound := h.session.state.LastRound
 		for finalRound >= 0 && !stopped {
 			h.syncTime()
@@ -907,10 +937,12 @@ loop:
 			if left <= 0 {
 				break
 			}
-			stopped = waitLocal(left, "Budget complete; waiting to claim final rewards", stop)
+			stopped = waitLocal(left, "Finishing; waiting to claim final rewards", stop)
 		}
 		if !stopped {
 			cmdClaim(h, o)
+			h.session.state.Finishing = false
+			h.session.save()
 		}
 	}
 	logf("mining stopped. burned %s HYPE in %d round(s)", fmtHype(spent, 4), burns)
