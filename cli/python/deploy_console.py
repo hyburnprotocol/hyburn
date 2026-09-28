@@ -218,7 +218,7 @@ def update_website(env, target=None):
 
 def affordable(balance, cap, spent, value, gas, fee, reserve):
     maximum = value + gas * fee
-    return maximum <= cap - spent and maximum + reserve <= balance
+    return (cap is None or maximum <= cap - spent) and maximum + reserve <= balance
 
 
 class Console:
@@ -253,13 +253,18 @@ class Console:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.state_path)
+        directory = os.open(self.state_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def screen(self, phase):
         balance = self.w3.eth.get_balance(self.address)
         dashboard = terminal_ui.current()
         if dashboard and self.state:
             burned = len(self.state['rounds']) * MIN_BURN
-            remaining = max(0, self.state['cap'] - self.state['spent'])
+            remaining = max(0, balance - self.state['reserve']) if self.state['cap'] is None else max(0, self.state['cap'] - self.state['spent'])
             dashboard.update(**{
                 'Phase': phase, 'Wallet': self.address,
                 'Miner': self.state.get('miner', 'not deployed'),
@@ -270,8 +275,8 @@ class Console:
                 'Session burned': f'{hype(burned)} HYPE',
                 'Session gas': f"{hype(self.state['spent'] - burned)} HYPE",
                 'Session spent': f"{hype(self.state['spent'])} HYPE",
-                'Spending cap': f"{hype(self.state['cap'])} HYPE",
-                'Remaining cap': f'{hype(remaining)} HYPE',
+                'Spending cap': 'UNLIMITED (wallet balance limited)' if self.state['cap'] is None else f"{hype(self.state['cap'])} HYPE",
+                'Remaining cap': 'UNLIMITED' if self.state['cap'] is None else f'{hype(remaining)} HYPE',
                 'Protected reserve': f"{hype(self.state['reserve'])} HYPE",
                 'Available incl. gas': f"{hype(max(0, min(remaining, balance - self.state['reserve'])))} HYPE",
             })
@@ -285,14 +290,14 @@ class Console:
         if self.state:
             burned = len(self.state['rounds']) * MIN_BURN
             gas_paid = self.state['spent'] - burned
-            cap_left = max(0, self.state['cap'] - self.state['spent'])
+            cap_left = max(0, balance - self.state['reserve']) if self.state['cap'] is None else max(0, self.state['cap'] - self.state['spent'])
             available = max(0, min(cap_left, balance - self.state['reserve']))
             print(f"Burn per transaction  {hype(MIN_BURN)} HYPE + gas", flush=True)
             print(f"Session burned total  {hype(burned)} HYPE ({len(self.state['rounds'])} confirmed burns)", flush=True)
             print(f"Session gas paid      {hype(gas_paid)} HYPE (deployment + mining)", flush=True)
             print(f"Total spent           {hype(self.state['spent'])} HYPE (session burns + gas)", flush=True)
-            print(f"Session spending cap  {hype(self.state['cap'])} HYPE (fixed initial budget)", flush=True)
-            print(f"Remaining cap         {hype(cap_left)} HYPE", flush=True)
+            print("Session spending cap  UNLIMITED (current and future deposits; reserve protected)" if self.state['cap'] is None else f"Session spending cap  {hype(self.state['cap'])} HYPE (fixed initial budget)", flush=True)
+            print("Remaining cap         UNLIMITED" if self.state['cap'] is None else f"Remaining cap         {hype(cap_left)} HYPE", flush=True)
             print(f"Protected reserve     {hype(self.state['reserve'])} HYPE (minimum wallet balance)", flush=True)
             print(f"Available to spend    {hype(available)} HYPE (burns + gas; limited by cap and balance)", flush=True)
             print(f"Miner                 {self.state.get('miner', 'not deployed')}", flush=True)
@@ -319,14 +324,37 @@ class Console:
         tx['maxFeePerGas'] = base * 2 + tip
         return tx
 
-    def settle(self):
+    def settle(self, recovery_timeout=30):
         pending = self.state.get('pending')
         if not pending:
             return
-        try:
-            receipt = self.w3.eth.get_transaction_receipt(pending['hash'])
-        except TransactionNotFound:
-            raise RuntimeError('Saved transaction is unresolved. No replacement or new transaction will be sent. Check its hash and rerun when resolved.')
+        deadline = time.monotonic() + recovery_timeout
+        replayed = False
+        print(f"Checking saved {pending['kind']} transaction: {pending['hash']}", flush=True)
+        while True:
+            try:
+                receipt = self.w3.eth.get_transaction_receipt(pending['hash'])
+                break
+            except TransactionNotFound:
+                if pending.get('raw') and not replayed:
+                    raw = bytes.fromhex(pending['raw'].removeprefix('0x'))
+                    if (Web3.to_hex(Web3.keccak(raw)).lower() != pending['hash'].lower()
+                            or Account.recover_transaction(raw).lower() != self.address.lower()):
+                        raise RuntimeError('Invalid saved signed transaction; journal preserved, no broadcast.')
+                    replayed = True
+                    print('Rebroadcasting the identical saved transaction once; same hash and nonce, no new signature.', flush=True)
+                    try:
+                        self.w3.eth.send_raw_transaction(raw)
+                    except Exception:
+                        # A lost response / already-known error does not establish failure.
+                        print('Broadcast outcome unavailable; checking the saved receipt. Journal preserved.', flush=True)
+                if time.monotonic() >= deadline:
+                    legacy = ' Legacy journal has no signed transaction; manual reconciliation required.' if not pending.get('raw') else ''
+                    raise RuntimeError(f"Saved transaction is unresolved: {pending['hash']}. Receipt unavailable after bounded retries. No replacement or newly signed transaction sent; journal preserved.{legacy}") from None
+                wait_locally(min(5, max(0, deadline-time.monotonic())),
+                             'Recovering saved transaction; receipt not available, no resend')
+        if Web3.to_hex(receipt['transactionHash']).lower() != pending['hash'].lower():
+            raise RuntimeError('Receipt does not match saved transaction; journal preserved.')
         gas_paid = receipt['gasUsed'] * receipt['effectiveGasPrice']
         self.state['last_tx_cost'] = dict(kind=pending['kind'],
                                           burn=pending['value'] if receipt['status'] == 1 else 0,
@@ -353,6 +381,8 @@ class Console:
 
     @terminal_ui.transaction_activity
     def send(self, fn, kind, value=0, rid=None, claims=None):
+        if self.state.get('pending'):
+            raise RuntimeError('Unresolved transaction; refusing to overwrite the journal or sign another transaction.')
         try:
             tx = self.prepare(fn, value)
         except ContractLogicError:
@@ -370,7 +400,9 @@ class Console:
         balance = self.w3.eth.get_balance(self.address, 'pending')
         if not affordable(balance, self.state['cap'], self.state['spent'], value,
                           tx['gas'], tx['maxFeePerGas'], self.state['reserve']):
-            print('STOP: remaining cap/balance cannot cover value + maximum gas + reserve.', flush=True)
+            maximum = value + tx['gas'] * tx['maxFeePerGas']
+            reason = 'saved spending cap reached' if self.state['cap'] is not None and maximum > self.state['cap'] - self.state['spent'] else 'wallet balance cannot cover value + maximum gas + protected reserve'
+            print(f'STOP: {reason}.', flush=True)
             return False
         if kind == "burn" and getattr(self, "finish_requested", False):
             print("Finishing: new burn cancelled before signing.")
@@ -378,10 +410,16 @@ class Console:
         signed = self.account.sign_transaction(tx)
         tx_hash = Web3.to_hex(signed.hash)
         # Persist before broadcasting: even a timeout/crash cannot silently repeat a burn.
-        self.state['pending'] = dict(hash=tx_hash, kind=kind, value=value, round=rid, claims=list(claims or []))
+        self.state['pending'] = dict(hash=tx_hash, kind=kind, value=value, round=rid, claims=list(claims or []),
+                                     raw=Web3.to_hex(signed.raw_transaction),
+                                     nonce=tx['nonce'], chain=self.args.chain_id, sender=self.address,
+                                     gas=tx['gas'], max_fee_per_gas=tx['maxFeePerGas'])
         self.save()
         print(f'Sending {kind}: {tx_hash}', flush=True)
-        self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        try:
+            self.w3.eth.send_raw_transaction(signed.raw_transaction)
+        except Exception:
+            raise RuntimeError(f'Broadcast outcome unavailable for {tx_hash}. Signed transaction saved; restart this session to recover the identical transaction. Do not reset the session.') from None
         print('Waiting for transaction confirmation (receipt checks every 5s).', flush=True)
         self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=5)
         self.settle()
@@ -461,6 +499,8 @@ class Console:
                 print(f"Deployment maximum gas cost: {hype(tx['gas'] * tx['maxFeePerGas'])} HYPE")
             print('No transaction sent. Fill private_key in the local JSON, then use --execute.')
             return
+        if self.state and self.state['cap'] is None:
+            print('Spending cap: UNLIMITED. Current and future deposits may fund mining; protected reserve still applies.')
         if terminal_ui.current():
             terminal_ui.current().update(**{'Reward claims': 'Automatic after start; claim gas counts toward cap'})
         label = 'Resume mining' if self.state and self.state.get('miner') else 'Deploy contracts and start mining'

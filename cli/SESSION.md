@@ -76,6 +76,12 @@ it checks the saved hash first and can rebroadcast only the **identical signed
 transaction**, never a replacement burn. A reverted transaction records gas but
 adds no burn value. Recovery is attempted before a new budget or transaction.
 
+The local developer console also saves signed bytes before broadcast and checks
+receipt hashes before recording costs or claims. Its recovery rebroadcasts the
+identical transaction at most once per attempt. Older developer journals without
+signed bytes remain blocked for manual reconciliation; a missing receipt or equal
+latest/pending nonces does not prove that a transaction was never submitted.
+
 Unresolved transactions block new sends. Prolonged RPC failures/timeouts stop the
 process with the journal intact; restore RPC access and run `mine` again. There is
 no automatic fee replacement or background service. An unrelated pending wallet

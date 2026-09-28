@@ -341,8 +341,9 @@ class Dashboard:
             return 'HYPE/USDC  -- | Spot price feed starts with the dashboard'
         data = self.market.snapshot()
         price, age = data.get('price'), data.get('age')
+        recovery = f" | WS retry {int(data['retry_in'] + .999)}s" if data.get('retry_in') is not None else ''
         if price is None:
-            return 'HYPE/USDC  -- | SPOT | ' + data.get('status', 'unavailable').upper()
+            return 'HYPE/USDC  -- | SPOT | ' + data.get('status', 'unavailable').upper() + recovery
         label = 'STALE' if data.get('stale') else ('LIVE' if data.get('status') == 'live' else data.get('status','cached').upper())
         change = data.get('session_change_pct')
         change_text = f' | Session {change:+.2f}%' if change is not None else ''
@@ -352,7 +353,8 @@ class Dashboard:
             low, high = min(history), max(history)
             levels = '._-:=+*#'
             chart = ' ' + ''.join(levels[min(7, int((v-low)/(high-low)*7))] if high>low else '-' for v in history)
-        return f'HYPE/USDC {price:,.4f} | SPOT MID | {label} {int(age or 0)}s{change_text}{chart}'
+        transport = ' REST' if data.get('transport') == 'rest' else ''
+        return f'HYPE/USDC {price:,.4f} | SPOT MID | {label}{transport} {int(age or 0)}s{recovery}{change_text}{chart}'
 
     def frame(self, width, height):
         width = max(1, width - 1)

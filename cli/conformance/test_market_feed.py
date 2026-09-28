@@ -1,4 +1,5 @@
 """The optional spot footer must not mislabel a perpetual or block mining."""
+import json
 import os
 from pathlib import Path
 import sys
@@ -66,6 +67,83 @@ class MarketFeedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             feed._poll('@107')
         self.assertIsNone(feed.snapshot()['price'])
+
+    def test_disconnect_reconnect_resets_backoff_and_preserves_price(self):
+        now = [0]
+        waits = []
+        calls = []
+        feed = MarketFeed(fetch=lambda payload: META if payload['type'] == 'spotMeta' else {},
+                          connect=lambda *a, **k: None, clock=lambda: now[0])
+        class Event:
+            stopped = False
+            def is_set(self):
+                return self.stopped
+            def set(self):
+                self.stopped = True
+            def wait(self, delay):
+                state = feed.snapshot()
+                self_outer.assertEqual(state['retry_in'], delay)
+                waits.append(delay)
+                now[0] += delay
+                if len(waits) == 8:
+                    self.set()
+        self_outer = self
+        feed.closed = Event()
+        def stream(coin, connect):
+            calls.append(coin)
+            if len(calls) in (1, 7):
+                feed._record(25 if len(calls) == 1 else 26)
+            raise OSError('network disconnected')
+        feed._stream = stream
+        feed._run()
+        self.assertEqual(waits, [2, 4, 8, 16, 30, 30, 2, 4])
+        self.assertEqual(set(calls), {'@107'})
+        self.assertEqual(feed.snapshot()['price'], 26)
+        self.assertEqual(feed.snapshot()['status'], 'stopped')
+        self.assertIsNone(feed.snapshot()['retry_in'])
+
+    def test_blocked_websocket_uses_throttled_rest_fallback(self):
+        now = [0]
+        polls = []
+        def fetch(payload):
+            if payload['type'] == 'spotMeta':
+                return META
+            polls.append(now[0])
+            return {'@107': '28', 'HYPE': '999'}
+        def connect(*args, **kwargs):
+            raise OSError('blocked')
+        feed = MarketFeed(fetch=fetch, connect=connect, clock=lambda: now[0])
+        def wait(delay):
+            now[0] += delay
+            if now[0] > 65:
+                feed.stop()
+        with patch.object(feed.closed, 'wait', side_effect=wait):
+            feed._run()
+        self.assertGreaterEqual(len(polls), 2)
+        self.assertTrue(all(b - a >= 30 for a, b in zip(polls, polls[1:])))
+        self.assertEqual(feed.snapshot()['price'], 28)
+        self.assertEqual(feed.snapshot()['transport'], 'rest')
+
+    def test_stream_accepts_reconnected_spot_and_exits_on_stop(self):
+        feed = MarketFeed()
+        sent = []
+        class Socket:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def send(self, value):
+                sent.append(json.loads(value))
+            def recv(self, timeout):
+                if feed.snapshot()['price'] is not None:
+                    feed.stop()
+                    raise TimeoutError()
+                return json.dumps({'channel': 'activeSpotAssetCtx',
+                    'data': {'coin': '@107', 'ctx': {'midPx': '29'}}})
+        feed._stream('@107', lambda *a, **k: Socket())
+        self.assertEqual(sent[0]['subscription']['coin'], '@107')
+        self.assertEqual(feed.snapshot()['price'], 29)
+        self.assertEqual(feed.snapshot()['transport'], 'websocket')
 
 
 if __name__ == '__main__':

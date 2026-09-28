@@ -16,6 +16,8 @@ WS_URL = 'wss://api.hyperliquid.xyz/ws'
 MAX_BYTES = 2_000_000
 STALE_AFTER = 45
 POLL_INTERVAL = 30
+RETRY_INITIAL = 2
+RETRY_MAX = 30
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -79,6 +81,9 @@ class MarketFeed:
         self.price = self.updated = self.first_price = None
         self.history = deque(maxlen=60)
         self.last_sample = None
+        self.retry_at = None
+        self.transport = None
+        self.observations = 0
         self.status = 'connecting' if self.enabled else 'disabled'
 
     def start(self):
@@ -94,6 +99,7 @@ class MarketFeed:
         with self.lock:
             if self.enabled:
                 self.status = 'stopped'
+            self.retry_at = None
 
     def snapshot(self):
         with self.lock:
@@ -102,6 +108,8 @@ class MarketFeed:
                     'price': self.price, 'age': age,
                     'stale': age is None or age > STALE_AFTER,
                     'status': self.status, 'history': tuple(self.history),
+                    'transport': self.transport,
+                    'retry_in': None if self.retry_at is None else max(0, self.retry_at - self.clock()),
                     'session_change_pct': None if self.first_price is None else
                     (self.price / self.first_price - 1) * 100}
 
@@ -111,7 +119,10 @@ class MarketFeed:
             return False
         now = self.clock()
         with self.lock:
+            if self.closed.is_set():
+                return False
             self.price, self.updated, self.status = price, now, 'live'
+            self.observations += 1
             if self.first_price is None:
                 self.first_price = price
             # Actual received observations only; at most one sample per five seconds.
@@ -136,6 +147,8 @@ class MarketFeed:
         mids = self.fetch({'type': 'allMids'})
         if not isinstance(mids, dict) or not self._record(mids.get(coin)):
             raise ValueError('Spot midpoint unavailable')
+        with self.lock:
+            self.transport = 'rest'
 
     def _stream(self, coin, connect):
         with connect(WS_URL, open_timeout=5, close_timeout=1, max_size=MAX_BYTES) as ws:
@@ -149,6 +162,9 @@ class MarketFeed:
                     raw = None
                 if raw is not None and self._message(json.loads(raw), coin):
                     last_valid = self.clock()
+                    with self.lock:
+                        self.transport = 'websocket'
+                        self.retry_at = None
                 now = self.clock()
                 if now - last_ping >= 20:
                     ws.send('{"method":"ping"}')
@@ -164,23 +180,43 @@ class MarketFeed:
             except ImportError:
                 connect = None
         coin = None
-        retry = 5
+        retry = RETRY_INITIAL
+        last_poll = float('-inf')
         while not self.closed.is_set():
+            before = self.observations
+            with self.lock:
+                self.retry_at = None
+                self.status = 'connecting'
             try:
                 if coin is None:
                     coin = resolve_pair(self.fetch({'type': 'spotMeta'}))
                 if connect is None:
                     self._poll(coin)
-                    retry = 5
+                    retry = RETRY_INITIAL
                     self.closed.wait(POLL_INTERVAL)
                 else:
                     self._stream(coin, connect)
             except Exception:
-                # Never forward upstream errors into a terminal or the mining engine.
+                if self.closed.is_set():
+                    break
+                # A healthy stream resets the failure streak, even if it later
+                # disconnects. Failed reconnects never wait longer than 30s.
+                if self.observations > before:
+                    retry = RETRY_INITIAL
+                # Some networks allow HTTPS but block WebSockets. Keep a real
+                # spot quote available while retrying the stream, at most 2/min.
+                if coin is not None and connect is not None and self.clock() - last_poll >= POLL_INTERVAL:
+                    last_poll = self.clock()
+                    try:
+                        self._poll(coin)
+                    except Exception:
+                        pass
                 with self.lock:
                     if not self.closed.is_set():
                         self.status = 'retrying'
+                        self.retry_at = self.clock() + retry
                 self.closed.wait(retry)
-                retry = min(120, retry * 2)
+                retry = min(RETRY_MAX, retry * 2)
         with self.lock:
             self.status = 'stopped'
+            self.retry_at = None

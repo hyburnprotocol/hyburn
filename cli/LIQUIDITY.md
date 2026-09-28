@@ -76,12 +76,20 @@ Block mode is detected but never changed automatically.
 State is stored outside the repository under
 `~/.hyburn/liquidity/999/<wallet>/`, or the corresponding `HYBURN_HOME` location.
 It includes selected NFT, preview and transaction journal. Completed journals
-are archived. Private keys and signed raw transactions are never saved there.
+are archived. Private keys are never saved there. Signed transaction bytes are
+saved privately before broadcast for exact-transaction recovery and omitted from
+receipt-review output. Do not share journals: signed bytes can submit the already
+authorized transaction, although they cannot authorize a different transaction.
 
 An interrupted transaction batch blocks further execution until reviewed.
 `reconcile` checks receipts without retrying or approving continuation. Partial
 completion can leave approvals or an already minted position; never delete a
-journal just to retry. After all submitted hashes are resolved, `./hyburn liquidity recover` shows
+journal just to retry. For an unresolved transaction with saved signed bytes,
+`./hyburn liquidity recover` offers an explicit `REBROADCAST SAVED TRANSACTION`
+confirmation. It resubmits only that identical transaction, never signs a replacement
+or continues the remaining steps. Original fees and deadlines still apply; expiry
+can cause a revert with gas charged. Legacy records without signed bytes require
+manual reconciliation. After all submitted hashes are resolved, the command shows
 confirmed steps and remaining approvals. Explicitly closing that reviewed local
 operation permits a fresh preview; it never undoes or repeats completed steps.
 Use `./hyburn liquidity revoke` to preview clearing remaining token approvals,

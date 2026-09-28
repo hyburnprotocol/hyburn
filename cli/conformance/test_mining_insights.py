@@ -204,7 +204,7 @@ class StartTests(unittest.TestCase):
     def test_decline_developer_precedes_signing_and_settle(self):
         c=deploy_console.Console.__new__(deploy_console.Console)
         c.args=argparse.Namespace(execute=True,yes=False)
-        c.state={'miner':A}; c.screen=MagicMock(); c.settle=MagicMock(); c.send=MagicMock()
+        c.state={'miner':A, 'cap':None}; c.screen=MagicMock(); c.settle=MagicMock(); c.send=MagicMock()
         with patch.object(ui,'choose_start',return_value=False), patch.object(deploy_console,'load_signer') as signer:
             c.run()
         signer.assert_not_called(); c.settle.assert_not_called(); c.send.assert_not_called()

@@ -48,7 +48,7 @@ class RecoveryTests(unittest.TestCase):
     def test_confirmed_timeout_recovers_complete(self):
         with tempfile.TemporaryDirectory() as root,patch('builtins.print'):
             self.state(root,[{'hash':'0x01','status':'prepared'}])
-            w=MagicMock();w.eth.get_transaction_receipt.return_value=MagicMock(status=1,gasUsed=5,effectiveGasPrice=2)
+            w=MagicMock();w.eth.get_transaction_receipt.return_value=MagicMock(transactionHash=b'\x01',status=1,gasUsed=5,effectiveGasPrice=2)
             self.assertEqual(m.reconcile(w)['status'],'complete')
             w.eth.send_raw_transaction.assert_not_called()
     def test_unknown_hash_never_allows_close(self):
@@ -67,8 +67,32 @@ class RecoveryTests(unittest.TestCase):
     def test_partial_is_not_reported_complete(self):
         with tempfile.TemporaryDirectory() as root,patch('builtins.print'):
             self.state(root,[{'hash':'0x01','status':'confirmed'}],3)
-            w=MagicMock();w.eth.get_transaction_receipt.return_value=MagicMock(status=1,gasUsed=5,effectiveGasPrice=2)
+            w=MagicMock();w.eth.get_transaction_receipt.return_value=MagicMock(transactionHash=b'\x01',status=1,gasUsed=5,effectiveGasPrice=2)
             self.assertEqual(m.reconcile(w)['status'],'partial')
+    def test_exact_rebroadcast_requires_confirmation_and_finishes_only_saved_step(self):
+        for approved in (False, True):
+            with tempfile.TemporaryDirectory() as root,patch('builtins.print') as output,patch('builtins.input',return_value='REBROADCAST SAVED TRANSACTION' if approved else 'Q'):
+                raw=b'fixture';h=m.Web3.to_hex(m.Web3.keccak(raw))
+                self.state(root,[{'hash':h,'raw':m.Web3.to_hex(raw),'status':'prepared'}])
+                w=MagicMock();w.eth.chain_id=999;w.eth.account.recover_transaction.return_value=A
+                receipt=MagicMock(transactionHash=m.Web3.keccak(raw),status=1,gasUsed=5,effectiveGasPrice=2)
+                w.eth.get_transaction_receipt.side_effect=[m.TransactionNotFound('missing'),receipt]
+                if approved:
+                    m.recover(w)
+                    w.eth.send_raw_transaction.assert_called_once_with(raw)
+                    self.assertEqual(m.json.loads(m.JOURNAL.read_text())['status'],'complete')
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'Cancelled'):m.recover(w)
+                    w.eth.send_raw_transaction.assert_not_called()
+                self.assertNotIn(m.Web3.to_hex(raw),str(output.call_args_list))
+
+    def test_wrong_receipt_never_marks_operation_complete(self):
+        with tempfile.TemporaryDirectory() as root,patch('builtins.print'):
+            self.state(root,[{'hash':'0x01','status':'prepared'}])
+            w=MagicMock();w.eth.get_transaction_receipt.return_value=MagicMock(transactionHash=b'\x02')
+            with self.assertRaisesRegex(RuntimeError,'Receipt hash mismatch'):m.reconcile(w)
+            self.assertEqual(m.json.loads(m.JOURNAL.read_text())['status'],'started')
+
     def test_expired_quote_and_total_gas_rejected_before_signing(self):
         w=MagicMock();w.eth.get_block.return_value=MagicMock(timestamp=101)
         args=m.parser().parse_args(['wrap'])

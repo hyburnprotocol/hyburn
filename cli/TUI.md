@@ -234,8 +234,10 @@ The footer streams the public Hyperliquid **HYPE/USDC spot midpoint**, resolved
 from spot metadata (never the HYPE perpetual). The stream uses its own background
 WebSocket, not the mining RPC, and sends no wallet information. Its status shows
 LIVE, RETRYING or STALE and the age of the last valid observation. After 45 seconds
-without a price it is stale; failures back off from 5 to 120 seconds. If WebSocket
-support is unavailable, REST snapshots are requested every 30 seconds. Prices
+without a price it is stale; failures back off from 2 to 30 seconds, with a retry
+countdown. A recovered stream resets the backoff. While WebSocket reconnects,
+REST provides fallback snapshots at most once every 30 seconds, labeled REST.
+If WebSocket support is unavailable, REST snapshots are requested every 30 seconds. Prices
 never change burn amounts, budgets or transaction decisions. This is a public
 mainnet market reference, including when the mining engine uses a test chain.
 

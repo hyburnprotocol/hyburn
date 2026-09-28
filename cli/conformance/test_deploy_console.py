@@ -142,9 +142,9 @@ class ClaimJournalTests(unittest.TestCase):
     def test_successful_receipt_records_claims_but_revert_does_not(self):
         for status in (1, 0):
             c = self.console()
-            c.state['pending'] = dict(hash='test-hash', kind='burn', value=console.MIN_BURN, round=3, claims=[1, 2])
+            c.state['pending'] = dict(hash='0x'+'11'*32, kind='burn', value=console.MIN_BURN, round=3, claims=[1, 2])
             c.w3 = MagicMock()
-            c.w3.eth.get_transaction_receipt.return_value = dict(status=status, gasUsed=100, effectiveGasPrice=2)
+            c.w3.eth.get_transaction_receipt.return_value = dict(transactionHash=bytes.fromhex('11'*32), status=status, gasUsed=100, effectiveGasPrice=2)
             if status:
                 c.settle()
                 self.assertEqual(c.state['claimed_rounds'], [0, 1, 2])
@@ -153,15 +153,87 @@ class ClaimJournalTests(unittest.TestCase):
                     c.settle()
                 self.assertEqual(c.state['claimed_rounds'], [0])
 
+    def test_missing_receipt_recovers_without_resubmission(self):
+        c = self.console()
+        c.state['pending'] = dict(hash='0x'+'11'*32, kind='claim', value=0, claims=[1])
+        c.w3 = MagicMock()
+        c.w3.eth.get_transaction_receipt.side_effect = [console.TransactionNotFound('missing'), dict(transactionHash=bytes.fromhex('11'*32), status=1, gasUsed=10, effectiveGasPrice=2)]
+        with patch.object(console,'wait_locally'):
+            c.settle()
+        self.assertIsNone(c.state['pending'])
+        self.assertEqual(c.state['spent'],20)
+        c.w3.eth.send_raw_transaction.assert_not_called()
+
+    def test_unresolved_receipt_keeps_journal_and_reports_hash(self):
+        c = self.console()
+        pending = dict(hash='0x'+'11'*32,kind='claim',value=0,claims=[1])
+        c.state['pending'] = pending.copy()
+        c.w3 = MagicMock()
+        c.w3.eth.get_transaction_receipt.side_effect = console.TransactionNotFound('missing')
+        with self.assertRaisesRegex(RuntimeError,'0x'+'11'*32):
+            c.settle(recovery_timeout=0)
+        self.assertEqual(c.state['pending'],pending)
+        c.save.assert_not_called()
+
     def test_standalone_claim_receipt_preserves_burn_count(self):
         c = self.console()
-        c.state['pending'] = dict(hash='claim', kind='claim', value=0, round=None, claims=[1])
+        c.state['pending'] = dict(hash='0x'+'11'*32, kind='claim', value=0, round=None, claims=[1])
         c.w3 = MagicMock()
-        c.w3.eth.get_transaction_receipt.return_value = dict(status=1, gasUsed=100, effectiveGasPrice=2)
+        c.w3.eth.get_transaction_receipt.return_value = dict(transactionHash=bytes.fromhex('11'*32), status=1, gasUsed=100, effectiveGasPrice=2)
         c.settle()
         self.assertEqual(c.state['rounds'], [0, 1, 2])
         self.assertEqual(c.state['claimed_rounds'], [0, 1])
         self.assertEqual(c.state['spent'], 200)
+
+    def test_signed_recovery_replays_identical_bytes_once(self):
+        c = self.console()
+        account = console.Account.create()
+        c.address = account.address
+        signed = account.sign_transaction(dict(chainId=999, nonce=0, to=account.address,
+            value=0, gas=21000, maxFeePerGas=2, maxPriorityFeePerGas=1))
+        c.state['pending'] = dict(hash=console.Web3.to_hex(signed.hash),
+            raw=console.Web3.to_hex(signed.raw_transaction), kind='claim', value=0, claims=[1])
+        c.w3 = MagicMock()
+        c.w3.eth.send_raw_transaction.side_effect = OSError('Lost broadcast response')
+        receipt = dict(transactionHash=signed.hash, status=1, gasUsed=10, effectiveGasPrice=2)
+        c.w3.eth.get_transaction_receipt.side_effect = [console.TransactionNotFound('missing'),
+            console.TransactionNotFound('missing'), receipt]
+        with patch.object(console, 'wait_locally'):
+            c.settle()
+        c.w3.eth.send_raw_transaction.assert_called_once_with(bytes(signed.raw_transaction))
+        self.assertIsNone(c.state['pending'])
+        self.assertEqual(c.state['spent'], 20)
+        c.settle()
+        self.assertEqual(c.state['spent'], 20)
+
+    def test_corrupt_raw_never_broadcasts(self):
+        c = self.console()
+        c.state['pending'] = dict(hash='0x'+'11'*32, raw='0x1234', kind='claim')
+        c.w3 = MagicMock()
+        c.w3.eth.get_transaction_receipt.side_effect = console.TransactionNotFound('missing')
+        with self.assertRaisesRegex(RuntimeError, 'Invalid saved'):
+            c.settle()
+        c.w3.eth.send_raw_transaction.assert_not_called()
+        c.save.assert_not_called()
+
+    def test_mismatched_receipt_keeps_journal(self):
+        c = self.console()
+        c.state['pending'] = dict(hash='0x'+'11'*32, kind='claim')
+        c.w3 = MagicMock()
+        c.w3.eth.get_transaction_receipt.return_value = dict(transactionHash=bytes.fromhex('22'*32))
+        with self.assertRaisesRegex(RuntimeError, 'does not match'):
+            c.settle()
+        self.assertEqual(c.state['spent'], 0)
+        c.save.assert_not_called()
+
+    def test_send_never_overwrites_unresolved_transaction(self):
+        c = self.console()
+        c.state['pending'] = {'hash':'original'}
+        c.prepare = MagicMock()
+        with self.assertRaisesRegex(RuntimeError, 'refusing to overwrite'):
+            c.send(MagicMock(), 'claim')
+        c.prepare.assert_not_called()
+        self.assertEqual(c.state['pending'], {'hash':'original'})
 
     def test_claim_ended_never_submits_current_round(self):
         c = self.console()
@@ -350,6 +422,11 @@ class BudgetTests(unittest.TestCase):
         self.assertFalse(console.affordable(119, 100, 0, 70, 10, 3, 20))
         self.assertFalse(console.affordable(1000, 100, 1, 70, 10, 3, 0))
 
+    def test_unlimited_cap_still_enforces_maximum_gas_and_reserve(self):
+        self.assertTrue(console.affordable(120, None, 999999, 70, 10, 3, 20))
+        self.assertFalse(console.affordable(119, None, 0, 70, 10, 3, 20))
+        self.assertFalse(console.affordable(20, None, 0, 1, 10, 3, 0))
+
     def test_topups_do_not_expand_cap(self):
         self.assertFalse(console.affordable(10000, 100, 90, 11, 0, 0, 0))
 
@@ -437,12 +514,33 @@ class ChainTest(unittest.TestCase):
                 c = console.Console(args)
                 self.assertEqual(c.state['spent'], original_spent)
                 c.account = account
+                # Reproduce the production failure: save a claim, then lose the
+                # connection before broadcast. A fresh process must recover it.
+                with patch.object(c.w3.eth, 'send_raw_transaction', side_effect=OSError('offline')):
+                    with self.assertRaisesRegex(RuntimeError, 'Signed transaction saved'):
+                        c.send(miner.functions.claimMany([0], account.address), 'claim', claims=[0])
+                saved = json.loads(Path(args.state).read_text())['pending']
+                self.assertIn('raw', saved)
+                self.assertFalse(miner.functions.claimed(0, account.address).call())
+                c.lock.close()
+                c.wallet_lease.close()
+                c = console.Console(args)
+                with patch.object(console, 'wait_locally'):
+                    c.settle()
+                self.assertTrue(miner.functions.claimed(0, account.address).call())
+                self.assertIsNone(c.state['pending'])
+                self.assertEqual(c.state['rounds'], [0])
+                self.assertIn(0, c.state['claimed_rounds'])
+                settled_spent = c.state['spent']
+                c.settle()
+                self.assertEqual(c.state['spent'], settled_spent)
+                c.account = account
                 c.state['cap'] = c.state['spent']
                 current = miner.functions.currentRoundId().call()
                 self.assertFalse(c.send(miner.functions.burn(current), 'burn', console.MIN_BURN, current))
                 c.state['pending'] = dict(hash='0x'+'ab'*32, kind='burn', value=console.MIN_BURN, round=1)
                 with self.assertRaisesRegex(RuntimeError, 'unresolved'):
-                    c.settle()
+                    c.settle(recovery_timeout=0)
                 c.lock.close()
                 c.wallet_lease.close()
             finally:

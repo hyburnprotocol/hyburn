@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Recover developer-console submissions using durably saved signed transactions;
+  validate receipt hashes and refuse to overwrite unresolved transactions.
+- Add explicit identical-transaction recovery for interrupted liquidity operations;
+  keep raw signed bytes out of receipt-review output and preserve legacy journals.
+- Reconnect the optional market WebSocket with a bounded backoff, retry countdown
+  and REST fallback while the stream is unavailable.
+
 - Display forward-confirmed HL Names in all four miners and the shared TUI's
   wallet view and rankings. Cache optional lookups separately from mining, hide
   personal names in sharing view, and fall back to addresses on failure.

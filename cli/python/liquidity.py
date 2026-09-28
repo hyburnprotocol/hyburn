@@ -201,6 +201,7 @@ def reconcile(w):
             receipt=w.eth.get_transaction_receipt(entry['hash'])
         except TransactionNotFound:
             entry['status']='unresolved'; uncertain=True; continue
+        p.require(Web3.to_hex(receipt.transactionHash).lower()==entry['hash'].lower(),'Receipt hash mismatch; journal preserved')
         entry['status']='confirmed' if receipt.status==1 else 'reverted'
         entry['gas_paid_wei']=receipt.gasUsed*receipt.effectiveGasPrice
         if journal['action']=='new' and receipt.status==1:
@@ -220,7 +221,8 @@ def reconcile(w):
     else:
         journal['status']='partial' if entries else 'not_submitted'
     save(journal)
-    print(json.dumps(journal,indent=2))
+    display=dict(journal,transactions=[{k:v for k,v in entry.items() if k!='raw'} for entry in journal['transactions']])
+    print(json.dumps(display,indent=2))
     print('Receipt review only. No transaction was resent.')
     return journal
 
@@ -228,6 +230,27 @@ def reconcile(w):
 def recover(w):
     journal=reconcile(w)
     if not journal or journal['status']=='complete': return
+    if journal['status']=='unresolved':
+        entries=[e for e in journal['transactions'] if e['status']=='unresolved']
+        p.require(len(entries)==1 and entries[0].get('raw'),'A transaction is pending or unknown. Legacy journal has no signed bytes; manual reconciliation required.')
+        entry=entries[0]
+        raw=bytes.fromhex(entry['raw'].removeprefix('0x'))
+        p.require(Web3.to_hex(Web3.keccak(raw)).lower()==entry['hash'].lower(),'Saved transaction hash mismatch')
+        p.require(w.eth.account.recover_transaction(raw).lower()==p.WALLET.lower(),'Saved transaction signer mismatch')
+        p.require(w.eth.chain_id==journal['chain']==999,'Recovery chain mismatch')
+        print('Recovery resubmits only the identical signed transaction: '+entry['hash'])
+        print('Original amounts, fees, nonce and deadline apply. An expired operation may revert and still cost gas. No later step runs automatically.')
+        p.require(input('Type REBROADCAST SAVED TRANSACTION: ').strip()=='REBROADCAST SAVED TRANSACTION','Cancelled')
+        try:
+            w.eth.send_raw_transaction(raw)
+        except Exception:
+            print('Broadcast outcome unavailable; journal preserved. Checking receipt only.')
+        try:
+            w.eth.wait_for_transaction_receipt(entry['hash'],timeout=180,poll_latency=5)
+        except Exception:
+            raise RuntimeError('Saved transaction remains unresolved; journal preserved. No new transaction signed.') from None
+        journal=reconcile(w)
+        if journal['status']=='complete': return
     p.require(journal['status']!='unresolved','A transaction is pending or unknown. Do not retry; inspect its hash first.')
     p.require(w.eth.get_transaction_count(p.WALLET,'pending')==w.eth.get_transaction_count(p.WALLET,'latest'),'Pending wallet transactions')
     print('Confirmed steps remain onchain. This closes the local operation; it does NOT undo or repeat them.')
@@ -308,7 +331,7 @@ def execute(w,args,transactions,details):
         transaction=dict(template,chainId=999,nonce=w.eth.get_transaction_count(p.WALLET,'latest'),gas=gas,gasPrice=gas_price)
         signed=account.sign_transaction(transaction)
         h='0x'+Web3.keccak(signed.raw_transaction).hex().removeprefix('0x')
-        entry={'step':index+1,'hash':h,'nonce':transaction['nonce'],'to':transaction['to'],'status':'prepared'}
+        entry={'step':index+1,'hash':h,'raw':Web3.to_hex(signed.raw_transaction),'nonce':transaction['nonce'],'to':transaction['to'],'status':'prepared'}
         journal['transactions'].append(entry); save(journal)
         print('Sending '+h,flush=True)
         w.eth.send_raw_transaction(signed.raw_transaction)
