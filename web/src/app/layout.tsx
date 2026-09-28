@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "./globals.css";
 import { MenuBar } from "@/components/MenuBar";
 import { CONFIG } from "@/lib/config";
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </main>
         <footer className="w-full max-w-4xl mx-auto px-4 py-4 text-sm flex flex-wrap gap-3 border-t">
           <span>Hyburn · Open source</span>
+          <Link href="/brand/">Brand kit</Link>
           <a href={CONFIG.repo} target="_blank" rel="noopener noreferrer">Source code</a>
           <a href={`${CONFIG.repo}/blob/HEAD/LICENSE`} target="_blank" rel="noopener noreferrer">MIT License</a>
         </footer>
