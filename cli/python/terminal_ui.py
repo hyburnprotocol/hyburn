@@ -159,7 +159,7 @@ class Dashboard:
             lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
             space = max(3, height - len(lines) - 1)
             if self.page == 0:
-                left_keys = ['Mode', 'Round (last read)', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Burns this run', 'Phase', 'Chain', 'Send window']
+                left_keys = ['Mode', 'Round (last read)', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Session burns', 'Phase', 'Chain', 'Send window']
                 right_keys = ['Balance (snapshot)', 'Available incl. gas', 'Session burned', 'Session gas', 'Session spent', 'Burn budget', 'Burn spending']
                 def rows(keys):
                     result = []
@@ -175,7 +175,7 @@ class Dashboard:
                 lines += self.box('RECENT EVENTS (3: full history)', list(self.events)[-3:], width, 5)
             elif self.page == 1:
                 rows = [f'{key:<22} {value}' for key, value in self.fields.items()]
-                rows += ['Snapshots from last read. No refresh RPC.', 'Public miner budget: burns only, resets each run.', 'Deploy console cap: saved; includes gas.']
+                rows += ['Snapshots from last read. No refresh RPC.', 'Public miner budget: saved across restarts; gas extra.', 'Deploy console cap: saved; includes gas.']
                 lines += self.box('WALLET / COSTS - j/k scroll, g top', rows[self.scroll:], width, space)
             elif self.page == 2:
                 end = len(self.events) - self.scroll

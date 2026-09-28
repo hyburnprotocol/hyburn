@@ -10,12 +10,13 @@ from decimal import Decimal
 from pathlib import Path
 from contextlib import nullcontext
 import terminal_ui
+from mining_session import Session
 
 from eth_account import Account
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_RPC = "https://rpc.hypurrscan.io"
 DEFAULT_CHAIN_ID = 999
 LOG_CHUNK = 1000
@@ -66,7 +67,7 @@ def parse_hype(s: str) -> int:
         d = Decimal(s)
     except Exception:
         raise SystemExit(f"not a HYPE amount: {s}")
-    if d < 0:
+    if not d.is_finite() or d < 0 or d * ONE_HYPE != (d * ONE_HYPE).to_integral_value():
         raise SystemExit("amount must be positive")
     return int(d * ONE_HYPE)
 
@@ -158,6 +159,8 @@ class Hyburn:
         return r
 
     def load_key(self) -> None:
+        if self.account is not None:
+            return
         ks = os.environ.get("HYBURN_KEYSTORE")
         pk = os.environ.get("HYBURN_PRIVATE_KEY")
         if ks:
@@ -251,8 +254,18 @@ class Hyburn:
     def claimable_ids(self, account: str) -> list[int]:
         return [r["round"] for r in self.round_rows(account, self.my_rounds(account)) if r["ended"] and not r["claimed"] and r["burned"] > 0]
 
+    def open_session(self):
+        if not hasattr(self, 'session'):
+            self.session = Session(self.chain_id, self.miner_addr, self.account.address)
+            self.session.recover(self.w3)
+        return self.session
+
     def send(self, fn, value: int = 0, dry_run: bool = False) -> dict | None:
         acct = self.account
+        if not dry_run:
+            self.open_session()
+            if self.w3.eth.get_transaction_count(acct.address, 'pending') != self.w3.eth.get_transaction_count(acct.address, 'latest'):
+                raise SystemExit('Wallet has another pending transaction; wait for it before continuing.')
         tx = fn.build_transaction({"from": acct.address, "value": value, "chainId": self.chain_id, "nonce": self.w3.eth.get_transaction_count(acct.address)})
         try:
             gas = self.w3.eth.estimate_gas(tx)
@@ -266,15 +279,22 @@ class Hyburn:
         tx["maxFeePerGas"] = base * 2 + tip
         cost = value + tx["gas"] * tx["maxFeePerGas"]
         bal = self.w3.eth.get_balance(acct.address)
+        reserve = getattr(self, 'reserve', 0) if value else 0
+        cost += reserve
         if bal < cost:
             raise SystemExit(f"balance {fmt_hype(bal)} HYPE < needed {fmt_hype(cost)} HYPE (value + max gas)")
         if dry_run:
             log(f"dry run: would send {fn.fn_name} value={fmt_hype(value)} HYPE gas={tx['gas']} maxFee={tx['maxFeePerGas']}")
             return None
+        if getattr(self, "should_stop", lambda: False)():
+            raise SystemExit("Stopped before signing; session preserved.")
         signed = acct.sign_transaction(tx)
+        rid = int(fn.args[0]) if value else -1
+        self.session.prepare(signed.raw_transaction, value, rid, getattr(self, 'mining', False))
         h = self.w3.eth.send_raw_transaction(signed.raw_transaction)
         log(f"sent {h.hex()}")
-        rc = self.w3.eth.wait_for_transaction_receipt(h, timeout=180)
+        rc = self.w3.eth.wait_for_transaction_receipt(h, timeout=180, poll_latency=5)
+        self.session.settle(rc)
         if rc["status"] != 1:
             raise SystemExit(f"transaction reverted: {h.hex()}")
         return rc
@@ -323,6 +343,8 @@ def cmd_history(hb: Hyburn, args) -> None:
 
 def cmd_claim(hb: Hyburn, args) -> None:
     hb.load_key()
+    if not args.dry_run:
+        hb.open_session()
     acct = hb.account.address
     ids = hb.claimable_ids(acct)
     if not ids:
@@ -337,13 +359,16 @@ def cmd_claim(hb: Hyburn, args) -> None:
     if not args.dry_run:
         log(f"done. HYBURN balance {fmt_token(hb.token.functions.balanceOf(acct).call())}")
 
-def do_burn(hb: Hyburn, amount: int, dry_run: bool) -> bool:
+def do_burn(hb: Hyburn, amount: int, dry_run: bool, expected_round=None) -> bool:
     if amount < hb.min_burn:
         raise SystemExit(f"amount below minimum {fmt_hype(hb.min_burn, 6)} HYPE")
     hb.sync_time()
     rid = hb.round_of(hb.now())
     if rid < 0:
         raise SystemExit("not started yet")
+    if expected_round is not None and rid != expected_round:
+        log("Round changed during preflight; checking the new round before signing.")
+        return False
     ids = hb.claimable_ids(hb.account.address)
     fn = hb.miner.functions.burnAndClaim(rid, ids) if ids else hb.miner.functions.burn(rid)
     log(f"burn {fmt_hype(amount)} HYPE into round {rid:,}" + (f", claiming {len(ids)} round(s)" if ids else ""))
@@ -368,14 +393,33 @@ def cmd_burn(hb: Hyburn, args) -> None:
 
 def cmd_mine(hb: Hyburn, args) -> None:
     hb.load_key()
-    amount = parse_hype(args.amount)
+    if not args.dry_run:
+        session = hb.open_session()
+        supplied = {k: (str(parse_hype(getattr(args, k))) if k in ('amount', 'budget', 'max_cost', 'reserve') else str(getattr(args, k))) if getattr(args, k) is not None else None for k in ('amount', 'budget', 'max_cost', 'at', 'rounds', 'reserve')}
+        settings = session.configure(supplied, args.new_session)
+        amount = int(settings['amount'])
+        max_cost = int(settings['max_cost']) if settings['max_cost'] else None
+        budget = int(settings['budget']) if settings['budget'] else None
+        args.at = int(settings['at'])
+        args.rounds = int(settings['rounds']) if settings['rounds'] else None
+        hb.reserve = int(settings['reserve'])
+        hb.mining = True
+        spent, burns = int(session.state['spent']), session.state['burns']
+        log(f'Resuming saved session: {burns} burns, {fmt_hype(spent, 9)} HYPE burned; gas {fmt_hype(int(session.state["gas"]), 9)} HYPE')
+    else:
+        if args.amount is None:
+            raise SystemExit('--dry-run needs --amount')
+        amount = parse_hype(args.amount)
+        max_cost = parse_hype(args.max_cost) if args.max_cost else None
+        budget = parse_hype(args.budget) if args.budget else None
+        args.at = args.at if args.at is not None else 30
+        spent = burns = 0
+    if not 0 < args.at < hb.dur or (args.rounds is not None and args.rounds <= 0):
+        raise SystemExit('--at must be within the round; --rounds must be positive')
     if amount < hb.min_burn:
         raise SystemExit(f"--amount below minimum {fmt_hype(hb.min_burn, 6)} HYPE")
-    max_cost = parse_hype(args.max_cost) if args.max_cost else None
-    budget = parse_hype(args.budget) if args.budget else None
-    spent = 0
-    burns = 0
     stop = {"flag": False}
+    hb.should_stop = lambda: stop["flag"]
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
     log(f"mining as {hb.account.address}: {fmt_hype(amount)} HYPE per round, send {args.at}s before round end"
         + (f", max cost {fmt_hype(max_cost, 6)} HYPE/HYBURN" if max_cost else "")
@@ -386,9 +430,19 @@ def cmd_mine(hb: Hyburn, args) -> None:
                          **{'Burn / round': f'{fmt_hype(amount, 9)} HYPE + gas',
                             'Burn budget': f'{fmt_hype(budget, 9)} HYPE (gas extra)' if budget is not None else 'Not set',
                             'Mode': 'DRY RUN' if args.dry_run else 'LIVE',
-                            'Send window': f'{args.at}s before round end'})
-    last_round = -1
+                            'Send window': f'{args.at}s before round end',
+                            'Session burns': burns, 'Burn spending': f'{fmt_hype(spent, 9)} HYPE (gas extra)'})
+        if not args.dry_run:
+            dashboard.update(**{'Protected reserve': f'{fmt_hype(hb.reserve, 9)} HYPE',
+                                'Session gas': f'{fmt_hype(int(hb.session.state["gas"]), 9)} HYPE',
+                                'Session file': hb.session.path})
+    last_round = hb.session.state['last_round'] if not args.dry_run else -1
     while not stop["flag"]:
+        if budget is not None and spent + amount > budget:
+            log(f"budget reached ({fmt_hype(spent)} of {fmt_hype(budget)} HYPE); stopping")
+            break
+        if args.rounds and burns >= args.rounds:
+            log(f'done: {burns} round(s)'); break
         log("Synchronizing chain time and checking round...")
         hb.sync_time()
         t = hb.now()
@@ -409,6 +463,9 @@ def cmd_mine(hb: Hyburn, args) -> None:
             continue
 
         last_round = rid
+        if not args.dry_run and hb.miner.functions.burned(rid, hb.account.address).call() > 0:
+            log(f'round {rid}: wallet already burned; skipping duplicate')
+            continue
         seq, total, _ = hb.miner.functions.rounds(rid).call()
         reward = hb.miner.functions.previewCurrentRoundReward().call()
         cost = (total + amount) * ONE_TOKEN // reward if reward else None
@@ -419,20 +476,38 @@ def cmd_mine(hb: Hyburn, args) -> None:
             log(f"budget reached ({fmt_hype(spent)} of {fmt_hype(budget)} HYPE); stopping")
             break
         try:
-            if do_burn(hb, amount, args.dry_run):
-                spent += amount
-                burns += 1
+            if do_burn(hb, amount, args.dry_run, rid):
+                if args.dry_run:
+                    spent += amount; burns += 1
+                else:
+                    spent, burns = int(hb.session.state['spent']), hb.session.state['burns']
                 if dashboard:
-                    dashboard.update(**{'Burns this run': burns, 'Burn spending': f'{fmt_hype(spent, 9)} HYPE (gas extra)'})
+                    dashboard.update(**{'Session burns': burns, 'Burn spending': f'{fmt_hype(spent, 9)} HYPE (gas extra)'})
+                    if not args.dry_run:
+                        dashboard.update(**{'Session gas': f'{fmt_hype(int(hb.session.state["gas"]), 9)} HYPE'})
                 if args.rounds and burns >= args.rounds:
                     log(f"done: {burns} round(s)")
                     break
         except SystemExit as e:
             log(f"stopped: {e}")
-            break
+            raise
+    if not args.dry_run and not stop['flag']:
+        final_round = hb.session.state['last_round']
+        while final_round >= 0 and not stop['flag']:
+            hb.sync_time()
+            left = hb.round_end(final_round) - hb.now()
+            if left <= 0:
+                break
+            wait_local(left, 'Budget complete; waiting to claim final rewards', stop)
+        if not stop['flag']:
+            cmd_claim(hb, args)
     log(f"mining stopped. burned {fmt_hype(spent)} HYPE in {burns} round(s)")
 
 def main() -> None:
+    from setup_miner import load_profile, main as setup
+    if sys.argv[1:] == ["setup"]:
+        setup(); return
+    load_profile()
     p = argparse.ArgumentParser(prog="hyburn", description="Hyburn miner (reference implementation)")
     p.add_argument("--plain", action="store_true", help="disable the interactive mining dashboard")
     p.add_argument("--rpc", default=os.environ.get("HYBURN_RPC", DEFAULT_RPC))
@@ -452,10 +527,12 @@ def main() -> None:
     s.set_defaults(fn=cmd_burn, needs_key=True)
 
     s = sub.add_parser("mine", help="burn every round until stopped")
-    s.add_argument("--amount", required=True, help="HYPE per round")
+    s.add_argument("--amount", help="HYPE per round (saved for resume)")
     s.add_argument("--max-cost", help="only burn if HYPE per HYBURN, counting your burn, is at or below this at send time; later burns by others in the same round still lower everyone's payout")
-    s.add_argument("--at", type=int, default=30, help="seconds before round end to send (default 30)")
-    s.add_argument("--budget", help="stop after this much HYPE burned in total")
+    s.add_argument("--at", type=int, help="seconds before round end to send (default 30)")
+    s.add_argument("--budget", help="saved session burn budget; gas extra")
+    s.add_argument("--reserve", help="HYPE balance protected for gas (default 0.001)")
+    s.add_argument("--new-session", action="store_true", help="explicitly start a new budget after recovering pending transactions")
     s.add_argument("--rounds", type=int, help="stop after this many burns")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_mine, needs_key=True)
@@ -469,13 +546,21 @@ def main() -> None:
     s.set_defaults(fn=cmd_history, needs_key=False)
 
     args = p.parse_args()
-    hb = Hyburn(args.rpc, args.miner, args.chain_id, args.deploy_block)
-    if args.cmd in ("status", "history") and not args.account and (os.environ.get("HYBURN_KEYSTORE") or os.environ.get("HYBURN_PRIVATE_KEY")):
-        hb.load_key()
-    if args.cmd == "history" and not args.account and not hb.account:
-        raise SystemExit("history needs --account or a key")
-    with terminal_ui.Dashboard(enabled=args.cmd == "mine" and not args.plain):
+    with terminal_ui.Dashboard(enabled=args.cmd == "mine" and not args.plain) as dashboard:
+        with dashboard.activity('Connecting to RPC and verifying chain parameters'):
+            hb = Hyburn(args.rpc, args.miner, args.chain_id, args.deploy_block)
+        if args.cmd in ("status", "history") and not args.account and (os.environ.get("HYBURN_KEYSTORE") or os.environ.get("HYBURN_PRIVATE_KEY")):
+            hb.load_key()
+        if args.cmd == "history" and not args.account and not hb.account:
+            raise SystemExit("history needs --account or a key")
         args.fn(hb, args)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print('Stopped. Saved transactions will be checked on restart.', file=sys.stderr)
+        raise SystemExit(130)
+    except Exception as error:
+        print(f'Operation failed ({type(error).__name__}). Existing session kept; restore RPC/file access and restart to recover.', file=sys.stderr)
+        raise SystemExit(1) from None

@@ -12,6 +12,7 @@ Use a dedicated mining account. If you already have a keystore, point to it:
 export HYBURN_KEYSTORE="$HOME/.hyburn/miner.keystore.json"
 ```
 
+For automatic connection-profile setup, use [setup_miner.py](SESSION.md#first-setup-then-resume).
 Otherwise, from the repository root, install the Python dependencies and run the
 offline import helper. This helper can prepare a wallet for **any** of the miners:
 
@@ -50,29 +51,10 @@ export HYBURN_KEYSTORE="$HOME/.hyburn/miner.keystore.json"
 
 ### What survives a restart?
 
-The public miners are not yet a fully resumable mining session manager. Their
-round-history cache is saved automatically under `~/.hyburn` (or `HYBURN_HOME`),
-keyed by chain, Miner and account. That cache avoids repeat history reads; it does
-not preserve your spending authorization or pending transaction journal.
-
-| State | Public miners (Python / Node / Go / Rust) |
-| --- | --- |
-| Encrypted wallet file | Kept on disk; unlock again on launch. |
-| RPC, contract, keystore path, burn settings | Supply via environment / arguments again in a new shell. |
-| Round history and claim cache | Saved and reused automatically. |
-| Burn budget used, burn count and last processed round | In memory only; reset on restart. |
-| Submitted transaction awaiting receipt | Check the transaction hash before restarting; automatic recovery is not implemented. |
-| Multiple processes for the same wallet | No session lock; run only one miner. |
-| Last round's reward after stopping | Run `claim` once that round ends. |
-
-During a running `mine` loop, timing and claiming older rounds with the next burn
-are automatic. Closing the process or sleeping the computer interrupts mining.
-A restart in the same round can burn again, and the same `--budget` authorizes a
-fresh burn budget. Do not treat restarting as resuming an unchanged spending cap.
-
-A fully resumable workflow needs persisted non-secret settings, an atomic session
-journal with cumulative budget usage, pending-receipt recovery before any new send,
-and a per-wallet process lock. These are not provided by the history cache or TUI.
+All four miners automatically save mining settings, budget usage, gas totals,
+confirmed burn count and pending transactions. The same files work across
+implementations. Use the [saved-session guide](SESSION.md) for one-time setup,
+resume commands, explicit new budgets and recovery behavior.
 
 ### Common issues
 
@@ -84,12 +66,11 @@ and a per-wallet process lock. These are not provided by the history cache or TU
 | Balance is zero / insufficient funds | Check the same account on HyperEVM chain 999. Native HYPE pays both burns and gas. |
 | RPC chain ID mismatch | The endpoint serves a different chain. Correct `--rpc` / `HYBURN_RPC`; do not simply remove the expected chain ID. |
 | Countdown is running | `mine` waits until its send window, 30 seconds before round end by default. |
-| Budget was reached | That run stopped. The public CLI's burn budget resets on restart and excludes gas. |
-| Last reward has not arrived | Wait for that round to close, then run `claim`; keep HYPE for gas. |
-| Transaction timed out | Check the printed transaction hash on the explorer before retrying; it may still confirm. |
+| Budget was reached | The saved budget is exhausted. Final rewards are claimed automatically; use `--new-session` with full settings to authorize another budget. |
+| Last reward has not arrived | Keep the miner open for its automatic final claim, or resume `mine` / run `claim` after the round closes. |
+| Transaction timed out | Restart to recover the saved transaction. It blocks new sends until settled. |
 | RPC rate limit / unavailable | Wait or use `--rpc` / `HYBURN_RPC` to choose another HyperEVM endpoint. Never start multiple miners to work around a stuck request. |
 
 The `deploy_console.py` tool is for creating a separate protocol deployment.
 Ordinary participants should use `hyburn.py`, `hyburn.mjs`, or the Go/Rust miner.
-Their budgets are per-process burn budgets; the deploy console's saved budget has
-different semantics and includes gas. Do not use it as an onboarding shortcut.
+Their saved budgets count burns; the deploy console's saved cap also includes gas. Do not use it as an onboarding shortcut.

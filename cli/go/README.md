@@ -31,16 +31,22 @@ To send at most two minimum burns (0.001998 HYPE plus gas):
 
 The first send waits until 30 seconds before round end by default. Keep the
 computer awake. Ctrl-C stops new work; an already broadcast transaction may confirm.
-`--budget` excludes gas and resets on restart. Restarting can burn in the same round.
-After your final round closes, leave HYPE for gas and run:
+`--budget` excludes gas and persists across restarts. Run `mine` without options
+to resume. Use `--new-session` with full settings for a new budget. Final rewards
+are claimed automatically after the last round closes.
+See [one-time setup and saved sessions](../SESSION.md).
+The miner automatically claims after its final round. If you stopped it early,
+resume `mine` or claim manually:
 
 ```sh
 ./hyburn claim
 ./hyburn history
 ```
 
-Exports last for this terminal only. Repeat them in a new terminal; no need to
-reimport your key. `--rpc` overrides the default. The RPC chain ID must match the
+The [one-time setup](../SESSION.md) saves these connection values for every
+implementation. With setup complete, use `mine` without options in new terminals;
+no repeated exports or key import are needed. Manual environment overrides remain
+limited to the shell where they were set. `--rpc` overrides the default. The RPC chain ID must match the
 configured ID. See the [shared reference](../README.md) for `--max-cost`, `--at`,
 and other options. This implementation has a countdown UI; the panel-based
 interactive dashboard is currently provided by the Python implementation.

@@ -13,6 +13,7 @@ import sys
 import threading
 from contextlib import contextmanager, nullcontext
 import terminal_ui
+from mining_session import wallet_lock
 from decimal import Decimal
 from requests.exceptions import RequestException
 from web3 import Web3
@@ -240,6 +241,7 @@ class Console:
             if (self.state['wallet'] != self.address or self.state['chain'] != args.chain_id
                     or self.state['build'] != self.fingerprint):
                 raise RuntimeError('Saved session wallet/chain/build mismatch; use the original build')
+        self.wallet_lease = wallet_lock(self.address)
         self.account = None
 
     def save(self):

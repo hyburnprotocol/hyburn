@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	version    = "0.1.0"
+	version    = "0.2.0"
 	defaultRPC = "https://rpc.hypurrscan.io"
 	logChunk   = 1000
 )
@@ -145,6 +145,10 @@ func logf(format string, a ...any) {
 func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(1) }
 
 type Hyburn struct {
+	stop        <-chan os.Signal
+	session     *Session
+	mining      bool
+	reserve     *big.Int
 	ctx         context.Context
 	client      *ethclient.Client
 	chainID     *big.Int
@@ -256,6 +260,9 @@ func (h *Hyburn) rewardForSeq(seq *big.Int) *big.Int {
 }
 
 func (h *Hyburn) loadKey() {
+	if h.key != nil {
+		return
+	}
 	if ks := os.Getenv("HYBURN_KEYSTORE"); ks != "" {
 		raw, err := os.ReadFile(ks)
 		if err != nil {
@@ -440,6 +447,20 @@ func (h *Hyburn) claimableIDs(acct common.Address) []*big.Int {
 }
 
 func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (*types.Receipt, error) {
+	if !dryRun {
+		h.openSession()
+		pending, e := h.client.PendingNonceAt(h.ctx, h.address)
+		if e != nil {
+			return nil, e
+		}
+		latest, e := h.client.NonceAt(h.ctx, h.address, nil)
+		if e != nil {
+			return nil, e
+		}
+		if pending != latest {
+			return nil, fmt.Errorf("wallet has another pending transaction; wait for it before continuing")
+		}
+	}
 	data, err := h.minerABI.Pack(method, args...)
 	if err != nil {
 		die("pack: " + err.Error())
@@ -449,14 +470,23 @@ func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (
 		return nil, fmt.Errorf("would revert: %w", err)
 	}
 	gas = gas * 12 / 10
-	hdr, _ := h.client.HeaderByNumber(h.ctx, nil)
+	hdr, err := h.client.HeaderByNumber(h.ctx, nil)
+	if err != nil {
+		return nil, err
+	}
 	tip, err := h.client.SuggestGasTipCap(h.ctx)
 	if err != nil || tip.Sign() == 0 {
 		tip = big.NewInt(1)
 	}
 	maxFee := new(big.Int).Add(new(big.Int).Mul(hdr.BaseFee, big.NewInt(2)), tip)
 	cost := new(big.Int).Add(value, new(big.Int).Mul(big.NewInt(int64(gas)), maxFee))
-	bal, _ := h.client.BalanceAt(h.ctx, h.address, nil)
+	bal, err := h.client.BalanceAt(h.ctx, h.address, nil)
+	if err != nil {
+		return nil, err
+	}
+	if value.Sign() > 0 && h.reserve != nil {
+		cost.Add(cost, h.reserve)
+	}
 	if bal.Cmp(cost) < 0 {
 		die(fmt.Sprintf("balance %s HYPE < needed %s HYPE (value + max gas)", fmtHype(bal, 4), fmtHype(cost, 4)))
 	}
@@ -464,12 +494,27 @@ func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (
 		logf("dry run: would send %s value=%s HYPE gas=%d maxFee=%s", method, fmtHype(value, 4), gas, maxFee)
 		return nil, nil
 	}
-	nonce, _ := h.client.PendingNonceAt(h.ctx, h.address)
+	nonce, err := h.client.PendingNonceAt(h.ctx, h.address)
+	if err != nil {
+		return nil, err
+	}
 	tx := types.NewTx(&types.DynamicFeeTx{ChainID: h.chainID, Nonce: nonce, GasTipCap: tip, GasFeeCap: maxFee, Gas: gas, To: &h.minerAddr, Value: value, Data: data})
+	if h.stop != nil {
+		select {
+		case <-h.stop:
+			return nil, fmt.Errorf("stopped before signing; session preserved")
+		default:
+		}
+	}
 	signed, err := types.SignTx(tx, types.LatestSignerForChainID(h.chainID), h.key)
 	if err != nil {
 		die("sign: " + err.Error())
 	}
+	rid := int64(-1)
+	if value.Sign() > 0 {
+		rid = args[0].(*big.Int).Int64()
+	}
+	h.session.prepare(signed, value, rid, h.mining)
 	if err := h.client.SendTransaction(h.ctx, signed); err != nil {
 		return nil, err
 	}
@@ -478,22 +523,24 @@ func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (
 	for time.Now().Before(deadline) {
 		rc, err := h.client.TransactionReceipt(h.ctx, signed.Hash())
 		if err == nil {
+			h.session.settle(rc)
 			if rc.Status != 1 {
 				die("transaction reverted: " + signed.Hash().Hex())
 			}
 			return rc, nil
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(5 * time.Second)
 	}
 	die("timed out waiting for receipt")
 	return nil, nil
 }
 
 type opts struct {
-	rpc, miner, account, amount, maxCost, budget string
-	chainID, deployBlock, at, rounds             int64
-	dryRun                                       bool
-	cmd                                          string
+	rpc, miner, account, amount, maxCost, budget, reserve string
+	newSession                                            bool
+	chainID, deployBlock, at, rounds                      int64
+	dryRun                                                bool
+	cmd                                                   string
 }
 
 func cmdStatus(h *Hyburn, o opts) {
@@ -578,6 +625,9 @@ func cmdHistory(h *Hyburn, o opts) {
 
 func cmdClaim(h *Hyburn, o opts) {
 	h.loadKey()
+	if !o.dryRun {
+		h.openSession()
+	}
 	ids := h.claimableIDs(h.address)
 	if len(ids) == 0 {
 		fmt.Println("nothing to claim")
@@ -606,7 +656,7 @@ func cmdClaim(h *Hyburn, o opts) {
 	}
 }
 
-func doBurn(h *Hyburn, amount *big.Int, dryRun bool) bool {
+func doBurn(h *Hyburn, amount *big.Int, dryRun bool, expected ...int64) bool {
 	if amount.Cmp(h.minBurn) < 0 {
 		die(fmt.Sprintf("amount below minimum %s HYPE", fmtHype(h.minBurn, 6)))
 	}
@@ -614,6 +664,10 @@ func doBurn(h *Hyburn, amount *big.Int, dryRun bool) bool {
 	rid := h.roundOf(h.now())
 	if rid < 0 {
 		die("not started yet")
+	}
+	if len(expected) > 0 && rid != expected[0] {
+		logf("Round changed during preflight; checking the new round before signing.")
+		return false
 	}
 	ids := h.claimableIDs(h.address)
 	extra := ""
@@ -678,6 +732,48 @@ func waitLocal(seconds float64, label string, stop <-chan os.Signal) bool {
 
 func cmdMine(h *Hyburn, o opts) {
 	h.loadKey()
+	var session *Session
+	if !o.dryRun {
+		session = h.openSession()
+		supplied := map[string]string{}
+		for k, v := range map[string]string{"amount": o.amount, "budget": o.budget, "max_cost": o.maxCost, "reserve": o.reserve} {
+			if v != "" {
+				supplied[k] = parseHype(v).String()
+			}
+		}
+		if o.at >= 0 {
+			supplied["at"] = strconv.FormatInt(o.at, 10)
+		}
+		if o.rounds != 0 {
+			supplied["rounds"] = strconv.FormatInt(o.rounds, 10)
+		}
+		settings := session.configure(supplied, o.newSession)
+		// Convert exact wei back into HYPE strings for the common parser.
+		units := func(v string) string {
+			if v == "" {
+				return ""
+			}
+			return strings.ReplaceAll(fmtHype(decimal(v), 18), ",", "")
+		}
+		o.amount = units(settings["amount"])
+		o.budget = units(settings["budget"])
+		o.maxCost = units(settings["max_cost"])
+		o.at, _ = strconv.ParseInt(settings["at"], 10, 64)
+		o.rounds, _ = strconv.ParseInt(settings["rounds"], 10, 64)
+		h.reserve = decimal(settings["reserve"])
+		h.mining = true
+		logf("Resuming saved session: %d burns, %s HYPE burned; gas %s HYPE", session.state.Burns, fmtHype(decimal(session.state.Spent), 9), fmtHype(decimal(session.state.Gas), 9))
+	} else {
+		if o.amount == "" {
+			die("--dry-run needs --amount")
+		}
+		if o.at < 0 {
+			o.at = 30
+		}
+	}
+	if o.at <= 0 || o.at >= h.dur || o.rounds < 0 {
+		die("--at must be within the round; --rounds must be positive")
+	}
 	amount := parseHype(o.amount)
 	if amount.Cmp(h.minBurn) < 0 {
 		die(fmt.Sprintf("--amount below minimum %s HYPE", fmtHype(h.minBurn, 6)))
@@ -691,8 +787,13 @@ func cmdMine(h *Hyburn, o opts) {
 	}
 	spent := big.NewInt(0)
 	burns := int64(0)
+	if session != nil {
+		spent = decimal(session.state.Spent)
+		burns = session.state.Burns
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
+	h.stop = stop
 	desc := fmt.Sprintf("mining as %s: %s HYPE per round, send %ds before round end", h.address.Hex(), fmtHype(amount, 4), o.at)
 	if maxCost != nil {
 		desc += fmt.Sprintf(", max cost %s HYPE/HYBURN", fmtHype(maxCost, 6))
@@ -705,11 +806,23 @@ func cmdMine(h *Hyburn, o opts) {
 	}
 	logf("%s", desc)
 	lastRound := int64(-1)
+	if session != nil {
+		lastRound = session.state.LastRound
+	}
 	stopped := false
 loop:
 	for !stopped {
+		if budget != nil && new(big.Int).Add(spent, amount).Cmp(budget) > 0 {
+			logf("budget reached (%s of %s HYPE); stopping", fmtHype(spent, 4), fmtHype(budget, 4))
+			break
+		}
+		if o.rounds > 0 && burns >= o.rounds {
+			logf("done: %d round(s)", burns)
+			break
+		}
 		select {
 		case <-stop:
+			stopped = true
 			break loop
 		default:
 		}
@@ -731,6 +844,10 @@ loop:
 			continue
 		}
 		lastRound = rid
+		if !o.dryRun && h.mcall("burned", big.NewInt(rid), h.address)[0].(*big.Int).Sign() > 0 {
+			logf("round %d: wallet already burned; skipping duplicate", rid)
+			continue
+		}
 		r := h.mcall("rounds", big.NewInt(rid))
 		total := r[1].(*big.Int)
 		reward := h.u256("previewCurrentRoundReward")
@@ -745,13 +862,32 @@ loop:
 			logf("budget reached (%s of %s HYPE); stopping", fmtHype(spent, 4), fmtHype(budget, 4))
 			break
 		}
-		if doBurn(h, amount, o.dryRun) {
-			spent.Add(spent, amount)
-			burns++
+		if doBurn(h, amount, o.dryRun, rid) {
+			if session != nil {
+				spent = decimal(session.state.Spent)
+				burns = session.state.Burns
+			} else {
+				spent.Add(spent, amount)
+				burns++
+			}
 			if o.rounds > 0 && burns >= o.rounds {
 				logf("done: %d round(s)", burns)
 				break
 			}
+		}
+	}
+	if !o.dryRun && !stopped {
+		finalRound := h.session.state.LastRound
+		for finalRound >= 0 && !stopped {
+			h.syncTime()
+			left := float64(h.roundEnd(finalRound)) - h.now()
+			if left <= 0 {
+				break
+			}
+			stopped = waitLocal(left, "Budget complete; waiting to claim final rewards", stop)
+		}
+		if !stopped {
+			cmdClaim(h, o)
 		}
 	}
 	logf("mining stopped. burned %s HYPE in %d round(s)", fmtHype(spent, 4), burns)
@@ -761,17 +897,28 @@ func usage() {
 	fmt.Println(`usage: hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
   status [--account ADDR]
   burn <hype> [--dry-run]
-  mine --amount HYPE [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N] [--dry-run]
+  mine [--amount HYPE] [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N]
+       [--reserve HYPE] [--new-session] [--dry-run]
+       No options: resume saved session. First run: --amount plus --budget or --rounds.
       --max-cost: skip the round if HYPE per HYBURN, counting your burn, is above this at send time
                   (later burns by others in the same round still lower everyone's payout)
   claim [--dry-run]
   history [--account ADDR]`)
 }
 
+func parseInteger(s string) int64 {
+	n, e := strconv.ParseInt(s, 10, 64)
+	if e != nil || n < 0 {
+		die("invalid integer option")
+	}
+	return n
+}
+
 func envInt(k string) int64 { v, _ := strconv.ParseInt(os.Getenv(k), 10, 64); return v }
 
 func main() {
-	o := opts{rpc: os.Getenv("HYBURN_RPC"), miner: os.Getenv("HYBURN_MINER"), chainID: envInt("HYBURN_CHAIN_ID"), deployBlock: envInt("HYBURN_DEPLOY_BLOCK"), at: 30}
+	loadProfile()
+	o := opts{rpc: os.Getenv("HYBURN_RPC"), miner: os.Getenv("HYBURN_MINER"), chainID: envInt("HYBURN_CHAIN_ID"), deployBlock: envInt("HYBURN_DEPLOY_BLOCK"), at: -1}
 	if o.rpc == "" {
 		o.rpc = defaultRPC
 	}
@@ -802,11 +949,18 @@ func main() {
 		case "--max-cost":
 			o.maxCost = next()
 		case "--at":
-			o.at, _ = strconv.ParseInt(next(), 10, 64)
+			o.at = parseInteger(next())
+		case "--new-session":
+			o.newSession = true
+		case "--reserve":
+			o.reserve = next()
 		case "--budget":
 			o.budget = next()
 		case "--rounds":
-			o.rounds, _ = strconv.ParseInt(next(), 10, 64)
+			o.rounds = parseInteger(next())
+			if o.rounds == 0 {
+				die("--rounds must be positive")
+			}
 		case "--dry-run":
 			o.dryRun = true
 		case "--version":
@@ -832,9 +986,6 @@ func main() {
 			die("burn needs an amount")
 		}
 		o.amount = pos[1]
-	}
-	if o.cmd == "mine" && o.amount == "" {
-		die("mine needs --amount")
 	}
 	h := newHyburn(o.rpc, o.miner, o.chainID, o.deployBlock)
 	if (o.cmd == "status" || o.cmd == "history") && o.account == "" && (os.Getenv("HYBURN_KEYSTORE") != "" || os.Getenv("HYBURN_PRIVATE_KEY") != "") {

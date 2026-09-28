@@ -19,13 +19,16 @@ is needed for ordinary mining.
 hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
   status  [--account ADDR]
   burn    <hype> [--dry-run]
-  mine    --amount HYPE [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N] [--dry-run]
+  mine    [--amount HYPE] [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N] [--reserve HYPE] [--new-session] [--dry-run]
   claim   [--dry-run]
   history [--account ADDR]
 ```
 
-`--budget` counts burns in the current process, excludes gas, and resets on
-restart. A restart can burn again in the same round. Keep HYPE for the final claim.
+`--budget` counts burns across restarts; gas is recorded separately. Settings,
+pending transactions and confirmed usage are saved automatically. First live use
+needs `--amount` plus `--budget` or `--rounds`; afterwards `mine` resumes them.
+The default gas reserve is 0.001 HYPE. At completion the miner waits and claims
+the final reward. See [setup and saved sessions](SESSION.md).
 
 `--max-cost` is a condition at send time, not a guarantee of the final cost: burns by others after yours in the same round lower everyone's payout.
 
@@ -35,7 +38,7 @@ Override with `--rpc` or `HYBURN_RPC`; existing explicit settings are unchanged.
 Python additionally provides a fixed terminal dashboard for `mine`; pass `--plain`
 before the command to disable it. Node, Go and Rust retain their countdown UI.
 
-Environment: `HYBURN_RPC`, `HYBURN_MINER`, `HYBURN_CHAIN_ID`, `HYBURN_DEPLOY_BLOCK`, `HYBURN_HOME` (cache, default `~/.hyburn`).
+Environment: `HYBURN_RPC`, `HYBURN_MINER`, `HYBURN_CHAIN_ID`, `HYBURN_DEPLOY_BLOCK`, `HYBURN_HOME` (profile, sessions and cache; default `~/.hyburn`).
 Key: `HYBURN_KEYSTORE` (encrypted JSON; password prompted or `HYBURN_KEYSTORE_PASSWORD`) or `HYBURN_PRIVATE_KEY`. Never as an argument.
 
 Use a dedicated wallet holding only the HYPE you intend to burn plus gas. Burned HYPE does not come back.

@@ -4,9 +4,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promptPassword } from "./password.mjs";
+import { Session, loadProfile } from "./session.mjs";
 import { Contract, JsonRpcProvider, Wallet, parseEther, isAddress, getAddress } from "ethers";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const DEFAULT_RPC = "https://rpc.hypurrscan.io";
 const LOG_CHUNK = 1000;
 const ONE_HYPE = 10n ** 18n;
@@ -89,6 +90,7 @@ class Hyburn {
     if (!isAddress(this.minerAddr)) die("HYBURN_MINER is not set to a valid address");
     this.provider = new JsonRpcProvider(this.rpc, this.chainIdOpt || undefined, this.chainIdOpt ? { staticNetwork: true } : {});
     try { this.chainId = Number((await this.provider.getNetwork()).chainId); } catch (e) { die(`cannot reach RPC ${this.rpc}`); }
+    this.provider.pollingInterval = 5000;
     const actualChain = Number(await this.provider.send("eth_chainId", []));
     if (this.chainIdOpt && actualChain !== this.chainIdOpt) die(`RPC chain ID mismatch: expected ${this.chainIdOpt}, got ${actualChain}`);
     this.chainId = actualChain;
@@ -116,6 +118,7 @@ class Hyburn {
     return r;
   }
   async loadKey() {
+    if (this.account) return;
     const ks = process.env.HYBURN_KEYSTORE, pk = process.env.HYBURN_PRIVATE_KEY;
     let wallet;
     if (ks) {
@@ -193,22 +196,37 @@ class Hyburn {
     const rows = await this.roundRows(account, await this.myRounds(account));
     return rows.filter((r) => r.ended && !r.claimed && r.burned > 0n).map((r) => r.round);
   }
+  async openSession() {
+    if (!this.session) { this.session = await Session.open(this.chainId, this.minerAddr, this.account.address); await this.session.recover(this.provider); }
+    return this.session;
+  }
   async send(fnName, args, value, dryRun) {
     const c = this.miner.connect(this.account);
     const from = this.account.address;
+    if (!dryRun) {
+      await this.openSession();
+      if (await this.provider.getTransactionCount(from, 'pending') !== await this.provider.getTransactionCount(from, 'latest')) throw new Error('Wallet has another pending transaction; wait for it before continuing.');
+    }
     let gas;
     try { gas = await c[fnName].estimateGas(...args, { value }); }
     catch (e) { die(`would revert: ${e.reason || e.shortMessage || e.message}`); }
     gas = (gas * 12n) / 10n;
     const fee = await this.provider.getFeeData();
     const maxFee = fee.maxFeePerGas ?? fee.gasPrice, tip = fee.maxPriorityFeePerGas ?? 1n;
-    const cost = value + gas * maxFee;
+    const cost = value + gas * maxFee + (value ? (this.reserve ?? 0n) : 0n);
     const bal = await this.provider.getBalance(from);
     if (bal < cost) die(`balance ${fmtHype(bal)} HYPE < needed ${fmtHype(cost)} HYPE (value + max gas)`);
     if (dryRun) { log(`dry run: would send ${fnName} value=${fmtHype(value)} HYPE gas=${gas} maxFee=${maxFee}`); return null; }
-    const tx = await c[fnName](...args, { value, gasLimit: gas, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip });
+    const request = await c[fnName].populateTransaction(...args, { value, gasLimit: gas, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip });
+    Object.assign(request, {chainId:this.chainId, nonce:await this.provider.getTransactionCount(from, 'latest'), type:2});
+    if (this.shouldStop?.()) throw new Error("Stopped before signing; session preserved.");
+    const raw = await this.account.signTransaction(request);
+    this.session.prepare(raw, value, value ? Number(args[0]) : -1, this.mining ?? false);
+    const tx = await this.provider.broadcastTransaction(raw);
     log(`sent ${tx.hash.slice(2)}`);
-    const rc = await tx.wait();
+    const rc = await this.provider.waitForTransaction(tx.hash, 1, 180000);
+    if (!rc) throw new Error("Transaction still pending; restart to recover it.");
+    this.session.settle(rc);
     if (rc.status !== 1) die(`transaction reverted: ${tx.hash}`);
     return rc;
   }
@@ -259,6 +277,7 @@ async function cmdHistory(hb, o) {
 
 async function cmdClaim(hb, o) {
   await hb.loadKey();
+  if (!o.dryRun) await hb.openSession();
   const acct = hb.account.address;
   const ids = await hb.claimableIds(acct);
   if (!ids.length) { console.log("nothing to claim"); return; }
@@ -271,11 +290,12 @@ async function cmdClaim(hb, o) {
   if (!o.dryRun) log(`done. HYBURN balance ${fmtToken(await hb.token.balanceOf(acct))}`);
 }
 
-async function doBurn(hb, amount, dryRun) {
+async function doBurn(hb, amount, dryRun, expectedRound=null) {
   if (amount < hb.minBurn) die(`amount below minimum ${fmtHype(hb.minBurn, 6)} HYPE`);
   await hb.syncTime();
   const rid = hb.roundOf(hb.now());
   if (rid < 0) die("not started yet");
+  if (expectedRound !== null && rid !== expectedRound) { log("Round changed during preflight; checking the new round before signing."); return false; }
   const ids = await hb.claimableIds(hb.account.address);
   log(`burn ${fmtHype(amount)} HYPE into round ${rid.toLocaleString("en-US")}` + (ids.length ? `, claiming ${ids.length} round(s)` : ""));
   let rc;
@@ -298,16 +318,33 @@ async function cmdBurn(hb, o) { await hb.loadKey(); await doBurn(hb, parseHype(o
 
 async function cmdMine(hb, o) {
   await hb.loadKey();
-  const amount = parseHype(o.amount);
+  let settings;
+  if (!o.dryRun) {
+    const session = await hb.openSession();
+    const supplied = {};
+    for (const [key, arg] of Object.entries({amount:'amount', budget:'budget', max_cost:'maxCost', at:'at', rounds:'rounds', reserve:'reserve'}))
+      if (o[arg] !== undefined) supplied[key] = ['amount','budget','max_cost','reserve'].includes(key) ? parseHype(o[arg]).toString() : String(o[arg]);
+    settings = session.configure(supplied, o.newSession);
+    hb.reserve = BigInt(settings.reserve); hb.mining = true;
+    console.log(`Resuming saved session: ${session.state.burns} burns, ${fmtHype(BigInt(session.state.spent),9)} HYPE burned; gas ${fmtHype(BigInt(session.state.gas),9)} HYPE`);
+  } else {
+    if (!o.amount) throw new Error('--dry-run needs --amount');
+    settings = {amount:parseHype(o.amount).toString(), budget:o.budget ? parseHype(o.budget).toString() : '', max_cost:o.maxCost ? parseHype(o.maxCost).toString() : '', at:String(o.at ?? 30), rounds:String(o.rounds ?? '')};
+  }
+  const amount = BigInt(settings.amount);
   if (amount < hb.minBurn) die(`--amount below minimum ${fmtHype(hb.minBurn, 6)} HYPE`);
-  const maxCost = o.maxCost ? parseHype(o.maxCost) : null;
-  const budget = o.budget ? parseHype(o.budget) : null;
-  const at = o.at ?? 30;
-  let spent = 0n, burns = 0, stop = false, lastRound = -1;
+  const maxCost = settings.max_cost ? BigInt(settings.max_cost) : null;
+  const budget = settings.budget ? BigInt(settings.budget) : null;
+  const at = Number(settings.at); o.rounds = Number(settings.rounds);
+  if (!Number.isInteger(at) || at <= 0 || at >= Number(hb.dur) || (settings.rounds && (!Number.isInteger(o.rounds) || o.rounds<=0))) throw new Error('--at must be within the round; --rounds must be positive');
+  let spent = o.dryRun ? 0n : BigInt(hb.session.state.spent), burns = o.dryRun ? 0 : hb.session.state.burns, stop = false, lastRound = o.dryRun ? -1 : hb.session.state.last_round;
+  hb.shouldStop = () => stop;
   process.on("SIGINT", () => { stop = true; });
   log(`mining as ${hb.account.address}: ${fmtHype(amount)} HYPE per round, send ${at}s before round end`
     + (maxCost !== null ? `, max cost ${fmtHype(maxCost, 6)} HYPE/HYBURN` : "") + (budget !== null ? `, budget ${fmtHype(budget)} HYPE` : "") + (o.dryRun ? ", DRY RUN" : ""));
   while (!stop) {
+    if (budget !== null && spent + amount > budget) { log(`budget reached (${fmtHype(spent)} of ${fmtHype(budget)} HYPE); stopping`); break; }
+    if (o.rounds && burns >= o.rounds) { log(`done: ${burns} round(s)`); break; }
     await hb.syncTime();
     const t = hb.now(), rid = hb.roundOf(t);
     if (rid < 0) { log(`not started; round 0 opens in ${fmtClock(Number(hb.genesis) - t)}`); await waitLocal(Math.max(1, Number(hb.genesis) - t), "Waiting for genesis", () => stop); continue; }
@@ -315,14 +352,23 @@ async function cmdMine(hb, o) {
     const sendAt = hb.roundEnd(rid) - at;
     if (t < sendAt) { await waitLocal(sendAt - t, `Round ${rid}: waiting for send window`, () => stop); continue; }
     lastRound = rid;
+    if (!o.dryRun && await hb.miner.burned(rid, hb.account.address) > 0n) { log(`round ${rid}: wallet already burned; skipping duplicate`); continue; }
     const [r, reward] = await Promise.all([hb.miner.rounds(rid), hb.miner.previewCurrentRoundReward()]);
     const cost = reward ? ((r.totalBurned + amount) * ONE_TOKEN) / reward : null;
     if (maxCost !== null && cost !== null && cost > maxCost) { log(`round ${rid.toLocaleString("en-US")}: cost ${fmtHype(cost, 6)} HYPE/HYBURN > max ${fmtHype(maxCost, 6)}; skipping`); continue; }
     if (budget !== null && spent + amount > budget) { log(`budget reached (${fmtHype(spent)} of ${fmtHype(budget)} HYPE); stopping`); break; }
-    if (await doBurn(hb, amount, o.dryRun)) {
-      spent += amount; burns++;
+    if (await doBurn(hb, amount, o.dryRun, rid)) {
+      if (o.dryRun) { spent += amount; burns++; } else { spent = BigInt(hb.session.state.spent); burns = hb.session.state.burns; }
       if (o.rounds && burns >= o.rounds) { log(`done: ${burns} round(s)`); break; }
     }
+  }
+  if (!o.dryRun && !stop) {
+    const finalRound = hb.session.state.last_round;
+    while (finalRound >= 0 && !stop) {
+      await hb.syncTime(); const left=hb.roundEnd(finalRound)-hb.now(); if (left<=0) break;
+      await waitLocal(left, 'Budget complete; waiting to claim final rewards', () => stop);
+    }
+    if (!stop) await cmdClaim(hb,o);
   }
   log(`mining stopped. burned ${fmtHype(spent)} HYPE in ${burns} round(s)`);
 }
@@ -331,10 +377,11 @@ function parseArgs(argv) {
   const o = { rpc: process.env.HYBURN_RPC || DEFAULT_RPC, miner: process.env.HYBURN_MINER || "", chainId: Number(process.env.HYBURN_CHAIN_ID || 0), deployBlock: Number(process.env.HYBURN_DEPLOY_BLOCK || 0), dryRun: false };
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i], next = () => argv[++i];
+    const a = argv[i], next = () => { if (!argv[i+1] || argv[i+1].startsWith("--")) die(`missing value for ${a}`); return argv[++i]; };
     if (a === "--rpc") o.rpc = next(); else if (a === "--miner") o.miner = next(); else if (a === "--chain-id") o.chainId = Number(next());
     else if (a === "--deploy-block") o.deployBlock = Number(next()); else if (a === "--account") o.account = next();
     else if (a === "--amount") o.amount = next(); else if (a === "--max-cost") o.maxCost = next(); else if (a === "--at") o.at = Number(next());
+    else if (a === "--new-session") o.newSession = true; else if (a === "--reserve") o.reserve = next();
     else if (a === "--budget") o.budget = next(); else if (a === "--rounds") o.rounds = Number(next()); else if (a === "--dry-run") o.dryRun = true;
     else if (a === "--version") { console.log(VERSION); process.exit(0); }
     else if (a === "-h" || a === "--help") { usage(); process.exit(0); }
@@ -347,20 +394,35 @@ function usage() {
   console.log(`usage: hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
   status [--account ADDR]
   burn <hype> [--dry-run]
-  mine --amount HYPE [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N] [--dry-run]
+  mine [--amount HYPE] [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N]
+       [--reserve HYPE] [--new-session] [--dry-run]
+       No options: resume saved session. First run: --amount plus --budget or --rounds.
       --max-cost: skip the round if HYPE per HYBURN, counting your burn, is above this at send time
                   (later burns by others in the same round still lower everyone's payout)
   claim [--dry-run]
   history [--account ADDR]`);
 }
 
+let activeMiner;
+try {
+loadProfile();
 const o = parseArgs(process.argv.slice(2));
 if (!o.cmd) { usage(); process.exit(1); }
 if (o.cmd === "burn" && !o.amount) die("burn needs an amount");
-if (o.cmd === "mine" && !o.amount) die("mine needs --amount");
+
 const hb = new Hyburn(o.rpc, o.miner, o.chainId, o.deployBlock);
+activeMiner=hb;
 await hb.init();
 if ((o.cmd === "status" || o.cmd === "history") && !o.account && (process.env.HYBURN_KEYSTORE || process.env.HYBURN_PRIVATE_KEY)) await hb.loadKey();
 const cmds = { status: cmdStatus, burn: cmdBurn, mine: cmdMine, claim: cmdClaim, history: cmdHistory };
 if (!cmds[o.cmd]) { usage(); process.exit(1); }
 await cmds[o.cmd](hb, o);
+
+} catch (error) {
+  console.error(`Stopped: ${(error.shortMessage || error.message || 'RPC/local operation failed').split('\n')[0].slice(0,240)}`);
+  console.error('Existing session kept; restore RPC/file access and restart to recover.');
+  process.exitCode=1;
+} finally {
+  activeMiner?.provider?.destroy();
+  activeMiner?.session?.lock.close();
+}

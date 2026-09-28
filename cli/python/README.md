@@ -24,9 +24,10 @@ From `cli/python`, after the quickstart exports and wallet setup:
 
 `mine` decides once per round, 30 seconds before its end by default (`--at`).
 `--max-cost` is a send-time condition, not a guarantee: later burns can reduce
-payout. `--budget` counts this process's burns only, excludes gas and resets on
-restart. A restarted process can burn again in the same round. Keep the computer
-awake and leave HYPE for claim gas. Full options: [CLI reference](../README.md).
+payout. `--budget` persists across restarts and excludes gas. Run `mine` to resume
+or `mine --new-session` with complete settings for a fresh budget. The default
+reserve is 0.001 HYPE; final rewards are claimed automatically. Keep the computer
+awake. See [setup and saved sessions](../SESSION.md). Full options: [CLI reference](../README.md).
 
 Other settings: `HYBURN_RPC` (default `https://rpc.hypurrscan.io`),
 `HYBURN_CHAIN_ID`, `HYBURN_HOME` (cache directory, default `~/.hyburn`).

@@ -78,19 +78,20 @@ Use a dedicated software-wallet account, such as a separate account in Rabby.
 To import that account's private key into an encrypted file, run this **offline** helper:
 
 ```sh
-.venv/bin/python wallet_setup.py
-export HYBURN_KEYSTORE="$HOME/.hyburn/miner.keystore.json"
+.venv/bin/python hyburn.py setup
 ```
 
-The helper asks for a private key and a new keystore password with hidden input.
+Setup accepts an existing keystore or asks for a private key and a new password
+with hidden input. It saves the connection profile for all four miners, so later
+terminals do not need repeated exports.
 Do not enter a seed phrase. It prints the derived public address, creates an
 owner-only encrypted file, never overwrites a file and makes no network requests.
 Check that the printed address matches your chosen wallet account. Back up the
 file and password separately. This password is for the new keystore; it need not
 be your browser wallet's password.
 
-If you already have an encrypted Ethereum JSON keystore, skip the helper and set
-`HYBURN_KEYSTORE` to its absolute path. The same file works with all four miners.
+If you already have an encrypted Ethereum JSON keystore, enter its absolute path
+during setup, or override `HYBURN_KEYSTORE` yourself. The same file works with all four miners.
 See the [wallet guide](cli/WALLET.md) for alternatives and troubleshooting.
 
 ### 3. Fund, then preview
@@ -123,15 +124,18 @@ the countdown can initially be almost 999 seconds. A supported terminal opens a
 dashboard. Use `hyburn.py --plain mine ...` for plain logs. Keep the computer awake.
 Ctrl-C stops the process; a transaction already broadcast may still confirm.
 
-`--budget` counts **burns in this run only**, excludes gas and **resets on restart**.
-Restarting `mine` can burn again in the same round. Check `history` first and set
-a new budget deliberately. `--max-cost` is a condition at send time, not a final
+`--budget` counts **burns across restarts**; gas is additional. Settings and
+pending transactions are saved automatically. Later, run `.venv/bin/python hyburn.py mine`
+to resume without resetting the budget. A new budget requires `--new-session` and
+complete settings. A 0.001 HYPE reserve is protected for claim gas. See
+[saved sessions](cli/SESSION.md) for recovery and spending details. `--max-cost` is a condition at send time, not a final
 price guarantee. The [shared CLI reference](cli/README.md) explains all options.
 
-### 5. Claim the last reward
+### 5. Automatic final claim
 
-Each successful burn also claims eligible earlier rounds. After the last round
-you participated in closes, claim its remaining reward:
+Each successful burn also claims eligible earlier rounds. At the budget or round
+limit, the miner waits for the final round to close and claims it automatically.
+If interrupted, resume `mine`; you can also claim manually:
 
 ```sh
 .venv/bin/python hyburn.py claim
@@ -142,9 +146,10 @@ Claiming also costs HYPE gas. Leave enough HYPE in the wallet for that transacti
 Rewards go to the burner address; there is no claim deadline. To display HYBURN in
 a wallet, import the token address above with **9 decimals**.
 
-Exports apply only to the current terminal. In a new terminal, return to
-`hyburn/cli/python` and repeat the public deployment exports and `HYBURN_KEYSTORE`
-export; you do not need to clone, reinstall or import your key again.
+With setup completed, a new terminal needs only the project directory and
+`.venv/bin/python hyburn.py mine`. The saved connection profile and mining session
+are loaded automatically; enter the keystore password to resume. Environment
+overrides apply only to the terminal where you set them.
 
 ## Repository
 

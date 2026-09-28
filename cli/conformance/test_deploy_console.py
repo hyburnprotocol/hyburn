@@ -221,6 +221,37 @@ class WalletImportTests(unittest.TestCase):
             self.assertNotIn('SECRET_SENTINEL', str(error.exception))
             self.assertFalse(target.exists())
 
+class SetupProfileTests(unittest.TestCase):
+    def test_existing_keystore_setup_saves_only_connection_fields(self):
+        import setup_miner
+        import wallet_setup
+        account = Account.create()
+        with tempfile.TemporaryDirectory() as temp:
+            keyfile = Path(temp) / 'test.keystore.json'
+            wallet_setup.write_keystore(keyfile, account.key.hex(), 'test-password-123')
+            with patch.dict(console.os.environ, {'HYBURN_HOME': temp}), \
+                 patch('builtins.input', return_value=str(keyfile)), \
+                 patch.object(setup_miner.sys.stdin, 'isatty', return_value=True), \
+                 patch.object(setup_miner.getpass, 'getpass', return_value='test-password-123'):
+                setup_miner.main()
+                profile = Path(temp) / 'config.json'
+                contents = profile.read_text()
+                self.assertEqual(set(json.loads(contents)), set(setup_miner.ALLOWED))
+                self.assertNotIn(account.key.hex(), contents)
+                self.assertNotIn('test-password-123', contents)
+                self.assertEqual(stat.S_IMODE(profile.stat().st_mode), 0o600)
+                setup_miner.main()
+                self.assertEqual(profile.read_text(), contents)
+
+    def test_explicit_key_and_rpc_override_saved_profile(self):
+        import setup_miner
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'config.json').write_text(json.dumps({'HYBURN_RPC': 'saved', 'HYBURN_KEYSTORE': 'saved-path'}))
+            with patch.dict(console.os.environ, {'HYBURN_HOME': temp, 'HYBURN_PRIVATE_KEY': 'test-only', 'HYBURN_RPC': 'explicit'}, clear=True):
+                setup_miner.load_profile()
+                self.assertEqual(console.os.environ['HYBURN_RPC'], 'explicit')
+                self.assertNotIn('HYBURN_KEYSTORE', console.os.environ)
+
 class KeyTests(unittest.TestCase):
     def test_private_key_loading_address_check_and_permissions(self):
         account = Account.create()
@@ -310,7 +341,11 @@ class ChainTest(unittest.TestCase):
                 args2.execute = True
                 args2.keystore = None
                 args2.reserve = '0.001'
+                c.wallet_lease.close()  # The same wallet cannot run two consoles.
                 auto = console.Console(args2)
+                from mining_session import Session
+                with self.assertRaisesRegex(SystemExit, 'Wallet already in use'):
+                    Session(31337, '0x' + '11' * 20, account.address)
                 target = Path(temp) / 'website.env'
                 write_env = console.update_website
                 def advance(_, *labels):
@@ -339,6 +374,7 @@ class ChainTest(unittest.TestCase):
                     website.assert_not_called()
                     build.assert_not_called()
                 auto.lock.close()
+                auto.wallet_lease.close()
 
                 c.lock.close()
                 c = console.Console(args)
@@ -351,6 +387,7 @@ class ChainTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'unresolved'):
                     c.settle()
                 c.lock.close()
+                c.wallet_lease.close()
             finally:
                 proc.terminate()
                 proc.wait(timeout=10)

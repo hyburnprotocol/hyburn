@@ -75,8 +75,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - if: matrix.lang == 'python'
-        run: python -m venv cli/python/.venv && cli/python/.venv/bin/pip install -r cli/python/requirements.txt
+      - run: python -m venv cli/python/.venv && cli/python/.venv/bin/pip install -r cli/python/requirements.txt
       - if: matrix.lang == 'node'
         uses: actions/setup-node@v4
         with:
@@ -106,3 +105,5 @@ jobs:
         run: python3 cli/conformance/cache_boundary.py "${{ matrix.cmd }}"
       - name: Local-chain conformance
         run: cli/conformance/run.sh "${{ matrix.cmd }}"
+      - name: Session recovery regression (local Anvil only)
+        run: cli/python/.venv/bin/python cli/conformance/session_recovery.py "${{ matrix.cmd }}"

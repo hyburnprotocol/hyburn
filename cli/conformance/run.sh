@@ -64,15 +64,15 @@ CACHE="$S/home/999-$(echo "$MINER" | tr 'A-Z' 'a-z')-$(echo "$A1" | tr 'A-Z' 'a-
 python3 -c "import json,sys; c=json.load(open(sys.argv[1])); e=c['rounds']['0']; assert c.get('v')==3 and e['claimed'] is True and int(e['burned'])==1500000000000000000 and int(e['total'])==2000000000000000000" "$CACHE" 2>/dev/null && pass "cache records the claimed round's final state (not re-queried)" || fail "cache format/state at $CACHE"
 # Leave a 90s window after each artificial time jump so the 30s local
 # resynchronization can observe it before the round closes.
-"${CLI[@]}" mine --amount 0.3 --at 90 --max-cost 0.00001 > "$S/mineA.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; stop_miner; sleep 1
+"${CLI[@]}" mine --amount 0.3 --budget 1 --at 90 --max-cost 0.00001 > "$S/mineA.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; stop_miner; sleep 1
 grep -q "skipping" "$S/mineA.log" && pass "mine skips when cost above max-cost" || { cat "$S/mineA.log"; fail "max-cost skip"; }
-"${CLI[@]}" mine --amount 0.3 --at 90 --rounds 2 > "$S/mineB.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; to_window 90; sleep 35; stop_miner; sleep 1
+"${CLI[@]}" mine --new-session --amount 0.3 --at 90 --rounds 2 > "$S/mineB.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; to_window 90; sleep 35; stop_miner; sleep 1
 [ "$(grep -c "confirmed in block" "$S/mineB.log")" = "2" ] && pass "mine burns in two rounds" || { cat "$S/mineB.log"; fail "mine two rounds"; }
 grep -q "claiming 1 round" "$S/mineB.log" && pass "second burn claims the first round" || { cat "$S/mineB.log"; fail "auto-claim"; }
 grep -q "done: 2 round" "$S/mineB.log" && pass "mine stops after --rounds" || fail "--rounds stop"
-"${CLI[@]}" mine --amount 0.3 --at 90 --budget 0.5 > "$S/mineC.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; to_window 90; sleep 35; stop_miner; sleep 1
+"${CLI[@]}" mine --new-session --amount 0.3 --at 90 --budget 0.5 > "$S/mineC.log" 2>&1 & MINING_PID=$!; sleep 2; to_window 90; sleep 35; to_window 90; sleep 35; stop_miner; sleep 1
 [ "$(grep -c "confirmed in block" "$S/mineC.log")" = "1" ] && grep -q "budget reached" "$S/mineC.log" && pass "mine stops at budget after one burn" || { cat "$S/mineC.log"; fail "budget"; }
 BAL=$(cast call $(cast call $MINER "token()(address)" --rpc-url $RPC) "balanceOf(address)(uint256)" $A1 --rpc-url $RPC | awk '{print $1}')
-[ "$BAL" = "15898437500000" ] && pass "HYBURN balance 15,898.4375 after claims (rounds 0,1,2)" || fail "final balance $BAL"
+[ "$BAL" = "21679687500000" ] && pass "HYBURN balance 21,679.6875 after automatic final claim (rounds 0,1,2,3)" || fail "final balance $BAL"
 [ "$(grep -c "claimable\|claimed" <<<"$("${CLI[@]}" history 2>&1)")" = "4" ] && pass "history lists 4 rounds" || fail "history count"
 echo "== all checks passed"
