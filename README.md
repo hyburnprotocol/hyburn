@@ -248,6 +248,10 @@ Set these public environment variables **before building**, then rebuild after c
 
 Never put private keys or keystore passwords in `NEXT_PUBLIC_*` variables. Full defaults are in [`config.ts`](web/src/lib/config.ts).
 
+Production deployment and CI configuration are documented in [WEB_DEPLOYMENT.md](WEB_DEPLOYMENT.md).
+Use [web/.env.example](web/.env.example) for the public mainnet settings. Production
+builds validate them against [web/deployment.json](web/deployment.json).
+
 ## Run the tests
 
 From the repository root, after initializing submodules:

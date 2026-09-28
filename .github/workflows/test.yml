@@ -45,6 +45,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm run test:deployment
       - run: npm run build
 
   miners:
@@ -112,3 +113,50 @@ jobs:
         run: cli/conformance/run.sh "${{ matrix.cmd }}"
       - name: Session recovery regression (local Anvil only)
         run: cli/python/.venv/bin/python cli/conformance/session_recovery.py "${{ matrix.cmd }}"
+
+  deploy:
+    name: Deploy website
+    needs: [contracts, web, miners]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'hyburnprotocol/hyburn'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://hyburn.xyz
+    concurrency:
+      group: hyburn-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Verify deployment credentials
+        run: test -n "$VERCEL_TOKEN" && test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
+      - name: Install pinned deployment CLI
+        run: npm install --global vercel@59.16.0
+      - name: Load production project configuration
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build validated production artifact
+        env:
+          HYBURN_PRODUCTION: '1'
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+      - name: Publish only if this is still main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/hyburnprotocol/hyburn/commits/main --jq .sha)
+          if [ "$latest" != "$GITHUB_SHA" ]; then
+            echo 'A newer commit exists; skipping obsolete deployment.'
+            exit 0
+          fi
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"

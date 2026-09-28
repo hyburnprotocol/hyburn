@@ -48,3 +48,4 @@ AGENTS.md
 *.keystore.json
 __pycache__/
 *.py[cod]
+.vercel/
