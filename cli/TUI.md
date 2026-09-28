@@ -123,3 +123,28 @@ a single person may use several wallets. Current-round shares can change before
 the round closes. Claimed HYBURN is the amount in RewardClaimed events, not an
 estimate of outstanding rewards and not the wallet's transferable token balance.
 Equal values use address order as a deterministic tie-breaker.
+
+## Control center
+
+From the repository root, run `./hyburn` (or `./cli/hyburn`). With no arguments,
+this opens a numbered terminal menu instead of entering the miner. Select mining,
+wallet setup, status, history, engine selection, or a read-only Project X pool
+overview. Python, Node.js, Go and Rust are selected in the same menu. Explicit
+commands such as `./hyburn --engine rust mine` continue to work. Mining retains
+its own start confirmation. Noninteractive use requires an explicit command.
+
+The public pool overview never loads a signer. It shows the existing canonical
+HYBURN/WHYPE 0.3% pool and links to Project X. Choose **7 — My liquidity** to manage your own positions through the public
+liquidity wizard. See [liquidity management](LIQUIDITY.md). Creating a position
+does not create a different pool. Pool balances are not active depth or a trade quote.
+
+A developer checkout may contain an optional, Git-ignored
+`script/liquidity/console.py`. Only when that file exists does the hub show its
+legacy local liquidity manager at option 9. This extension has separate wallet, position and
+spending settings. It is not shipped to public users and does not inherit mining
+permissions or budgets. No key is loaded just by opening either menu.
+
+If the ignored local developer configuration exists, the hub also exposes a
+separate developer mining console entry. This resumes its own configuration and
+session through its existing start confirmation, not the public miner's profile.
+The hub tests file existence only; it does not read the configuration or keys.

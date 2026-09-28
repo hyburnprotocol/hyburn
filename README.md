@@ -2,7 +2,7 @@
 
 **Burn HYPE. Mine HYBURN.**
 
-[Start mining](#mine-on-hyperevm) · [Website](https://hyburn.xyz) · [Wallet setup](cli/WALLET.md)
+[Start mining](#mine-on-hyperevm) · [Website](https://hyburn.xyz) · [Wallet setup](cli/WALLET.md) · [Liquidity](cli/LIQUIDITY.md)
 
 Hyburn is a burn-to-mint protocol for HyperEVM. Every 999 seconds, participants share a round's scheduled HYBURN reward in proportion to the HYPE they burn. There is no premine, team allocation, administrator, upgrade path or pause function.
 
@@ -31,6 +31,26 @@ For an initial-reward round, burning 1 HYPE out of a final total of 4 HYPE earns
 Empty rounds issue nothing and do not advance the reward schedule. Integer rounding dust is never minted, and unclaimed rewards remain unminted, so actual minted supply can be below the cap. Burning locks HYPE economically; it does not reduce HyperCore's protocol-level supply. Burned HYPE cannot be recovered, and the contract provides no price or liquidity guarantee.
 
 The [whitepaper source](web/src/app/whitepaper/page.tsx) describes the complete schedule, terminal remainder and trust assumptions.
+
+## Liquidity on Project X
+
+Manage your own position in the existing HYBURN/WHYPE **0.3%** pool:
+`0x561fF10F136da03be56F31A53cd8D87f93694106` (HyperEVM, chain 999).
+Verify the HYBURN token CA: `0xC02E218F52ea5D38759BB1AfA92C197eF30673B4`.
+
+Run `./hyburn` for the control center, then choose **7 — My liquidity**, or run
+`./hyburn liquidity` directly. The public tool discovers your positions, creates
+new ranges in the same pool, adds/removes liquidity, collects owed tokens, and
+wraps/unwraps HYPE. It has no developer wallet or default position.
+
+Every change starts with a local fork preview. Explicit execution requires local
+signing, separate gas/deposit limits and exclusive use of the wallet. Anvil is
+required for liquidity-change previews, but not for mining or read-only views.
+See [the liquidity guide](cli/LIQUIDITY.md) for installation and recovery.
+
+Liquidity is optional, is not replenished automatically by mining, and can lose
+value relative to holding. Fees and exit liquidity are not guaranteed. Opening
+the website or terminal menu does not sign or send a transaction.
 
 ## Mine on HyperEVM
 

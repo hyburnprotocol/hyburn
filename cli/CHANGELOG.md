@@ -1,5 +1,16 @@
 # Miner changes
 
+## Unreleased
+
+- Add a shared `./hyburn` control center and public wallet-owned liquidity menu.
+- Manage positions in the existing Project X HYBURN/WHYPE 0.3% pool, with local
+  fork previews, explicit signing and separate per-wallet records and budgets.
+- Check whole-operation gas requirements and quote expiry before execution;
+  reconcile confirmed transactions, review partial operations and revoke approvals.
+- Add the website liquidity guide and repository onboarding/recovery instructions.
+- Liquidity-change previews require Anvil. Normal mining and read-only pool views
+  do not. The legacy developer liquidity tools remain local and Git-ignored.
+
 ## 0.3.0
 
 All four engines now use the same interactive TUI. Stop the running miner before

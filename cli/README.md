@@ -84,3 +84,14 @@ execution requires `--yes`. Tabs 4/5/7 show current-round rankings, your recent
 history and all-time participation. Tab 6 distinguishes Token CA from Miner.
 Caches are created and resumed automatically for each chain/contract. Partial
 coverage is explicitly labeled. See [the shared TUI guide](TUI.md).
+
+## Open the control center
+
+From the project root, run `./hyburn`. Choose mining, setup, status, history,
+engine selection, or the read-only liquidity-pool overview. The menu starts no
+transaction. See [the control center guide](TUI.md#control-center). Existing
+`./cli/hyburn ...` commands remain supported.
+
+Public liquidity management is available through `./hyburn liquidity` or menu 7.
+See [setup, previews and wallet-owned positions](LIQUIDITY.md). Mining-engine
+selection does not change the shared liquidity module.

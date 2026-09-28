@@ -30,7 +30,15 @@ def main():
         engine=args[pos+1];del args[pos:pos+2]
     if engine not in ('python','node','go','rust'):
         raise SystemExit('Choose --engine python, node, go or rust')
-    if not args:args=['mine']
+    if not args or args == ['menu']:
+        from hub import main as hub_main
+        hub_main(engine)
+        return
+    if args and args[0]=='liquidity':
+        python=ensure_runtime()
+        script='liquidity_console.py' if len(args)==1 else 'liquidity.py'
+        os.execv(str(python),[str(python),str(ROOT/'python'/script),*args[1:]])
+        return
     if args==['setup'] or engine=='python':
         python=ensure_runtime()
         command=[str(python),str(ROOT/'python/hyburn.py')]

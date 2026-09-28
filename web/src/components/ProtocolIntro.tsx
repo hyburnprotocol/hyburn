@@ -30,6 +30,7 @@ export function ProtocolIntro() {
             <p className="hb-hero-detail">HYPE goes to a vault with no withdrawal function. After the round ends, claim your share of its scheduled reward.</p>
             <div className="hb-actions">
               <Link className="hb-raised hb-action" href="/mine/">Get a miner →</Link>
+              <Link className="hb-raised hb-action" href="/liquidity/">Liquidity guide →</Link>
               <Link className="hb-raised hb-action" href="/whitepaper/">Read the whitepaper</Link>
             </div>
             <p className="hb-principles">No premine. No team allocation. No admin.</p>

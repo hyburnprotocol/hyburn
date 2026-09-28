@@ -136,3 +136,16 @@ Use [TUI controls](TUI.md) for rankings, history and screenshot privacy.
 Python, Node.js, Go and Rust share the launcher and wallet profile, but only
 Python is required for this beginner path. Never post keys, passwords or raw logs
 containing authenticated RPC URLs when asking for help.
+
+## Return without remembering commands
+
+From the project folder, run:
+
+```sh
+./hyburn
+```
+
+Choose an engine, connect a wallet, or open the mining dashboard from the menu.
+The dashboard still asks before starting mining. The pool overview is read-only
+and requires no wallet. Creating or managing liquidity is separate from mining;
+never assume the mining spending budget covers liquidity deposits.

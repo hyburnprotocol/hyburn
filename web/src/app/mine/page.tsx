@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Panel } from "@/components/Panel";
 import { CONFIG } from "@/lib/config";
 
@@ -77,6 +78,9 @@ export default function MinePage() {
           </details>
         ))}
       </div>
+      <h2>One control center</h2>
+      <pre><code>./hyburn</code></pre>
+      <p>Open the menu to choose a mining engine, connect a wallet or manage your own liquidity positions. The menu itself sends no transactions. Liquidity has separate budgets and requirements; see the <Link href="/liquidity/">liquidity guide</Link>.</p>
       <h2>Explore the dashboard</h2>
       <table>
         <thead><tr><th>Key</th><th>View</th></tr></thead>
