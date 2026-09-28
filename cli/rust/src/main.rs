@@ -363,6 +363,7 @@ async fn cmd_status(h: &mut Hyburn, account: Option<String>) -> Result<()> {
         let mut cl = U256::ZERO;
         for id in &ids { cl += h.miner.claimable(*id, a).call().await?; }
         println!("account        {a:?}");
+        tui::wallet_name(format!("{a:?}"),h.chain_id,false);
         println!("  HYPE         {}", fmt_hype(h.provider.get_balance(a).await?, 4));
         println!("  HYBURN       {}", fmt_token(h.token.balanceOf(a).call().await?, 3));
         println!("  this round   {} HYPE{}", fmt_hype(mine, 4), if total.is_zero() { String::new() } else { format!("  ({})", pct(mine, total)) });
@@ -373,6 +374,7 @@ async fn cmd_status(h: &mut Hyburn, account: Option<String>) -> Result<()> {
 
 async fn cmd_history(h: &Hyburn, account: Option<String>) -> Result<()> {
     let acct: Address = match account { Some(a) => a.parse()?, None => h.signer.as_ref().map(|s| s.address()).ok_or_else(|| eyre!("history needs --account or a key"))? };
+    tui::wallet_name(format!("{acct:?}"),h.chain_id,false);
     let ids = h.my_rounds(acct).await?;
     let rows = h.round_rows(acct, &ids).await?;
     if rows.is_empty() { println!("no burns from this account"); return Ok(()); }
@@ -481,6 +483,7 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
     if !dry_run {let state=h.session.borrow().as_ref().unwrap().state.clone();spent=state.spent.parse()?;burns=state.burns;last_round=state.last_round;}
     let one_token = U256::from(10u64).pow(U256::from(9u64));
     tui::event(json!({"type":"meta","chain":h.chain_id,"miner":format!("{:?}",h.miner_addr),"token":format!("{:?}",h.token.address()),"account":format!("{:?}",h.address()),"genesis":h.genesis,"duration":h.dur,"deploy":h.deploy_block,"at":at,"amount":amount.to_string(),"budget":budget.map(|b|b.to_string()).unwrap_or_default(),"reserve":h.reserve.to_string(),"dry":dry_run}));
+    tui::wallet_name(format!("{:?}",h.address()),h.chain_id,true);
     let mut checked_round = None;
     log("Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.");
     while !stop.load(Ordering::SeqCst) && !finish.load(Ordering::SeqCst) {

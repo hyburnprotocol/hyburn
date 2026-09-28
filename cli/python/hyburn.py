@@ -328,6 +328,8 @@ def cmd_status(hb: Hyburn, args) -> None:
         ids = hb.claimable_ids(acct)
         cl = sum(hb.miner.functions.claimable(r, acct).call() for r in ids)
         print(f"account        {acct}")
+        from hl_names import announce
+        announce(acct, hb.chain_id, background=False)
         print(f"  HYPE         {fmt_hype(hb.w3.eth.get_balance(acct))}")
         print(f"  HYBURN       {fmt_token(hb.token.functions.balanceOf(acct).call())}")
         print(f"  this round   {fmt_hype(mine)} HYPE" + (f"  ({mine * 10000 // total / 100:.2f}%)" if total else ""))
@@ -335,6 +337,8 @@ def cmd_status(hb: Hyburn, args) -> None:
 
 def cmd_history(hb: Hyburn, args) -> None:
     acct = Web3.to_checksum_address(args.account or hb.account.address)
+    from hl_names import announce
+    announce(acct, hb.chain_id, background=False)
     rows = hb.round_rows(acct, hb.my_rounds(acct))
     if not rows:
         print("no burns from this account")
@@ -433,6 +437,9 @@ def cmd_mine(hb: Hyburn, args) -> None:
         + (f", max cost {fmt_hype(max_cost, 6)} HYPE/HYBURN" if max_cost else "")
         + (f", budget {fmt_hype(budget)} HYPE" if budget else "") + (", DRY RUN" if args.dry_run else ""))
     dashboard = terminal_ui.current()
+    if not dashboard:
+        from hl_names import announce
+        announce(hb.account.address, hb.chain_id)
     if dashboard:
         dashboard.update(Wallet=hb.account.address, Miner=hb.miner_addr, Chain=hb.chain_id,
                          **{'Burn / round': f'{fmt_hype(amount, 9)} HYPE + gas',

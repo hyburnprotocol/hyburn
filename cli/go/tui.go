@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"golang.org/x/term"
@@ -9,7 +10,36 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+func walletName(address string, chain int64, background bool) {
+	if chain != 999 || os.Getenv("HYBURN_HL_NAMES") == "0" || os.Getenv("HYBURN_TUI_CHILD") == "1" {
+		return
+	}
+	script := tuiScript()
+	if script == "" {
+		return
+	}
+	run := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "python3", filepath.Join(filepath.Dir(script), "python", "hl_names.py"), address, "999")
+		cmd.Env = []string{}
+		for _, key := range []string{"PATH", "HOME", "HYBURN_HOME", "HLN_API_KEY", "SYSTEMROOT"} {
+			if value, ok := os.LookupEnv(key); ok {
+				cmd.Env = append(cmd.Env, key+"="+value)
+			}
+		}
+		cmd.Stdout = os.Stdout
+		_ = cmd.Run()
+	}
+	if background {
+		go run()
+	} else {
+		run()
+	}
+}
 
 func uiEvent(value map[string]any) {
 	if os.Getenv("HYBURN_TUI_CHILD") == "1" {

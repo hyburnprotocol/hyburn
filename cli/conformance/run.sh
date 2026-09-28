@@ -5,6 +5,8 @@ set -euo pipefail
 read -r -a CLI <<< "${1:?provide a miner command}"
 # Avoid inheriting a real wallet/chain configuration from the invoking shell.
 unset HYBURN_KEYSTORE HYBURN_KEYSTORE_PASSWORD HYBURN_PRIVATE_KEY HYBURN_CHAIN_ID
+# Local chain 999 fixtures must not query the external mainnet name service.
+export HYBURN_HL_NAMES=0
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 S=$(mktemp -d "${TMPDIR:-/tmp}/hyburn-conformance.XXXXXX")
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')

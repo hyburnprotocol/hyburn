@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { uiEvent, routeUI } from "./tui.mjs";
+import { uiEvent, routeUI, walletName } from "./tui.mjs";
 import { promptPassword } from "./password.mjs";
 import { Session, loadProfile } from "./session.mjs";
 import { Contract, JsonRpcProvider, Wallet, parseEther, isAddress, getAddress } from "ethers";
@@ -265,6 +265,7 @@ async function cmdStatus(hb, o) {
     const ids = await hb.claimableIds(a);
     let cl = 0n; for (const id of ids) cl += await hb.miner.claimable(id, a);
     console.log(`account        ${a}`);
+    walletName(a, hb.chainId, false);
     console.log(`  HYPE         ${fmtHype(await hb.provider.getBalance(a))}`);
     console.log(`  HYBURN       ${fmtToken(await hb.token.balanceOf(a))}`);
     console.log(`  this round   ${fmtHype(mine)} HYPE` + (total ? `  (${pct(mine, total)})` : ""));
@@ -274,6 +275,7 @@ async function cmdStatus(hb, o) {
 
 async function cmdHistory(hb, o) {
   const acct = getAddress(o.account || hb.account?.address || die("history needs --account or a key"));
+  walletName(acct, hb.chainId, false);
   const rows = await hb.roundRows(acct, await hb.myRounds(acct));
   if (!rows.length) { console.log("no burns from this account"); return; }
   console.log(`${"round".padStart(10)} ${"seq".padStart(9)} ${"you burned".padStart(16)} ${"round total".padStart(16)} ${"share".padStart(8)} ${"HYBURN".padStart(16)}  status`);
@@ -357,6 +359,7 @@ async function cmdMine(hb, o) {
   uiEvent({type:"meta",chain:hb.chainId,miner:hb.minerAddr,token:hb.token.target,account:hb.account.address,
     genesis:Number(hb.genesis),duration:Number(hb.dur),deploy:hb.deployBlock,at,amount:amount.toString(),
     budget:budget?.toString() ?? '',reserve:(hb.reserve ?? 0n).toString(),dry:o.dryRun});
+  walletName(hb.account.address, hb.chainId);
   const usage=()=>uiEvent({type:"usage",spent:spent.toString(),burns,gas:o.dryRun?'0':hb.session.state.gas});
   log("Automatic claims enabled (gas applies). F in TUI: finish and claim; Ctrl-C: stop immediately.");
   while (!stop && !finish) {

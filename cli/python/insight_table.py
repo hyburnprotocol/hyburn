@@ -22,6 +22,7 @@ class InsightTable:
         self.status = 'ALL'
         self.sort = 'round' if page == 4 else 'burned'
         self._view = None
+        self.names = None
 
     def set_records(self, records, own):
         old = self.view()
@@ -36,13 +37,15 @@ class InsightTable:
         return row.get('account', row.get('round'))
 
     def view(self):
-        if self._view is not None:
+        if self._view is not None and not (self.names and self.query):
             return self._view
         ordered = sorted(self.records, key=lambda r:(-(r.get(self.sort) or 0), str(self.identity(r))))
         result = []
         for rank,row in enumerate(ordered,1):
             own = row.get('account','').lower() == self.own
             text = ' '.join(str(row.get(k,'')) for k in ('account','round','status')).lower()
+            if self.names and row.get('account'):
+                text += ' ' + (self.names.cached(row['account']) or '')
             if own:
                 text += ' me you'
             if self.query.lower() not in text or (self.mine_only and not own):
@@ -120,7 +123,7 @@ class InsightTable:
             header='   Rank Wallet               HYPE burned Rounds     Claimed HYBURN'
         else:
             header='   Rank Wallet                      HYPE burned    Share   Txs'
-        count=max(1,height-5)
+        count=max(1,height-(6 if self.names and self.page != 4 else 5))
         self.selected=min(self.selected,max(0,len(rows)-1))
         self.offset=min(self.offset,self.selected)
         if self.selected>=self.offset+count:
@@ -134,6 +137,10 @@ class InsightTable:
                 body.append(f"{pointer} {r['round']:>6} {burned:>17} {r['txs']:>5}  {r['status']:<10} {claimed:>17}")
             else:
                 address=r['account'][:8]+'...'+r['account'][-6:]
+                if self.names:
+                    name = self.names.get(r['account'])
+                    if name:
+                        address = name if len(name) <= 17 else name[:14] + '...'
                 if privacy:
                     address='YOU' if r['own'] else 'WALLET'
                 burned=amount(r['burned'],18) if not privacy else '[hidden]'
@@ -151,6 +158,11 @@ class InsightTable:
             detail='Privacy view: addresses and amounts hidden.'
         elif selected and self.page!=4:
             detail=selected['account']+f' | burn txs: {selected["txs"]}'
+            if self.names:
+                name = self.names.cached(selected['account'])
+                if name:
+                    # Keep the address on its own line even in narrow terminals.
+                    body.append('Name: ' + name)
         elif selected:
             detail=f"Round {selected['round']} | Claim amount is received rewards, not holdings."
         else:

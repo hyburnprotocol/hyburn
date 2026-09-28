@@ -1,9 +1,24 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 
 export function uiEvent(event) {
   if (process.env.HYBURN_TUI_CHILD === '1') console.log('@HYBURN_UI@'+JSON.stringify(event));
+}
+
+export function walletName(address, chain, background = true) {
+  if (Number(chain) !== 999 || process.env.HYBURN_HL_NAMES === '0' || process.env.HYBURN_TUI_CHILD === '1') return;
+  const script = fileURLToPath(new URL('../python/hl_names.py', import.meta.url));
+  // A display-only helper receives public arguments and no wallet credentials.
+  const env = Object.fromEntries(['PATH','HOME','HYBURN_HOME','HLN_API_KEY','SYSTEMROOT'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
+  const args = [script, address, String(chain)];
+  if (background) {
+    const child = spawn('python3', args, {env, stdio:['ignore','inherit','ignore'], timeout:5000});
+    child.on('error',()=>{});
+    child.unref();
+  } else {
+    spawnSync('python3', args, {env, stdio:['ignore','inherit','ignore'], timeout:5000});
+  }
 }
 
 export async function routeUI(options, argv) {

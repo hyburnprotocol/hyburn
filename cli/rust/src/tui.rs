@@ -6,6 +6,24 @@ pub fn event(value:Value){
  if std::env::var("HYBURN_TUI_CHILD").as_deref()==Ok("1"){println!("@HYBURN_UI@{value}");}
 }
 pub struct Busy;
+pub fn wallet_name(address:String,chain:u64,background:bool){
+ if chain!=999 || std::env::var("HYBURN_HL_NAMES").as_deref()==Ok("0") || std::env::var("HYBURN_TUI_CHILD").as_deref()==Ok("1"){return}
+ let Some(path)=script() else{return};
+ let run=move || {
+  let mut command=Command::new("python3");
+  command.arg(path.parent().unwrap().join("python/hl_names.py")).args([address,"999".to_string()]);
+  command.env_clear().stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+  for key in ["PATH","HOME","HYBURN_HOME","HLN_API_KEY","SYSTEMROOT"]{if let Ok(value)=std::env::var(key){command.env(key,value);}}
+  if let Ok(mut child)=command.spawn(){
+   let start=std::time::Instant::now();
+   loop {match child.try_wait(){Ok(Some(_))=>break,Err(_)=>{let _=child.kill();let _=child.wait();break},_=>{}}
+    if start.elapsed()>=std::time::Duration::from_secs(5){let _=child.kill();let _=child.wait();break}
+    std::thread::sleep(std::time::Duration::from_millis(50));
+   }
+  }
+ };
+ if background {std::thread::spawn(run);} else {run();}
+}
 impl Busy {pub fn new()->Self{event(json!({"type":"busy","value":true}));Self}}
 impl Drop for Busy {fn drop(&mut self){event(json!({"type":"busy","value":false}));}}
 fn script()->Option<PathBuf>{

@@ -2,6 +2,11 @@
 
 Four implementations, one interface. Every implementation passes the same scripted scenario before release.
 
+All four miners can automatically display forward-confirmed `.hl` primary names
+beside wallet information. The shared TUI also labels visible leaderboard rows;
+full addresses remain available and privacy mode hides personal names. No extra
+setup or mining RPC calls are needed. See [HL Names behavior and opt-out](TUI.md#hl-names).
+
 | Language | Path | Run |
 |---|---|---|
 | Python (reference) | `python/hyburn.py` | `python/.venv/bin/python python/hyburn.py …` |

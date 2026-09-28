@@ -594,6 +594,7 @@ func cmdStatus(h *Hyburn, o opts) {
 	bal, _ := h.client.BalanceAt(h.ctx, acct, nil)
 	tb := h.call(h.tokenAddr, h.tokenABI, "balanceOf", acct)[0].(*big.Int)
 	fmt.Printf("account        %s\n", acct.Hex())
+	walletName(acct.Hex(), h.chainID.Int64(), false)
 	fmt.Printf("  HYPE         %s\n", fmtHype(bal, 4))
 	fmt.Printf("  HYBURN       %s\n", fmtToken(tb, 3))
 	share := ""
@@ -613,6 +614,7 @@ func cmdHistory(h *Hyburn, o opts) {
 	} else {
 		die("history needs --account or a key")
 	}
+	walletName(acct.Hex(), h.chainID.Int64(), false)
 	rows := h.roundRows(acct, h.myRounds(acct))
 	if len(rows) == 0 {
 		fmt.Println("no burns from this account")
@@ -845,6 +847,7 @@ func cmdMine(h *Hyburn, o opts) {
 		reserveText = h.reserve.String()
 	}
 	uiEvent(map[string]any{"type": "meta", "chain": h.chainID.Int64(), "miner": h.minerAddr.Hex(), "token": h.tokenAddr.Hex(), "account": h.address.Hex(), "genesis": h.genesis, "duration": h.dur, "deploy": h.deployBlock, "at": o.at, "amount": amount.String(), "budget": budgetText, "reserve": reserveText, "dry": o.dryRun})
+	walletName(h.address.Hex(), h.chainID.Int64(), true)
 	usage := func() {
 		gas := "0"
 		if !o.dryRun {

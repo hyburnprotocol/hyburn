@@ -5,6 +5,39 @@ still owns its signer, saved spending budget and transactions. The shared Python
 UI receives public status events; it never signs on behalf of a native engine.
 The developer deployment console uses the same display and statistics modules.
 
+## HL Names
+
+On HyperEVM mainnet, the header, Wallet / Costs tab and visible ranking rows automatically
+show a `.hl` primary name when it resolves back to the same wallet address.
+Owning a name alone does not set a primary name. The selected ranking row always
+retains its full address below the table; names are display labels, never signer,
+session, reward, or ranking identifiers. Search also matches names already cached.
+The sharing view hides wallet names along with personal addresses and rows.
+
+Name lookups run independently of mining through the public HL Names HTTPS API,
+not the mining RPC. Only public addresses/names are sent. The TUI requests names
+for visible wallets, with one worker, a bounded queue, two-second request timeouts
+and at most one wallet lookup per second. A failed request pauses lookups for a
+minute. Positive results expire after one hour; missing/unverified results after
+five minutes. Expired labels fall back to addresses while refreshing. Cache files
+live in `~/.hyburn/names/999/` (or under `HYBURN_HOME`), separate from sessions.
+
+All four plain CLIs show names at mining startup and in `status` and `history`.
+Mining startup lookup is asynchronous. Read-only commands may wait briefly for
+the label. Node/Go/Rust reuse the repository's dependency-free Python helper;
+if Python or the helper is unavailable, they keep displaying addresses normally.
+Only ASCII `.hl` labels are displayed, preventing terminal-control and visually
+ambiguous Unicode labels. Names do not authenticate a person's identity.
+
+No extra setup is needed: the integration uses the upstream's documented public
+fallback API key. An optional `HLN_API_KEY` environment variable overrides it;
+never commit a personal API key. Availability remains subject to HL Names limits.
+Disable all name lookups with `HYBURN_HL_NAMES=0` before starting the CLI.
+The native helper subprocess receives no wallet keys or passwords.
+
+API source: [HL Names endpoint reference](https://github.com/HLnames/use-hln-api/blob/master/references/endpoints.md)
+and [published public key](https://github.com/HLnames/use-hln-api/blob/master/SKILL.md).
+
 ## One entry point
 
 From a clone of the repository on macOS/Linux or WSL, with Python 3.10+ and

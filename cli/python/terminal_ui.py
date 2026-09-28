@@ -144,6 +144,7 @@ class Dashboard:
         self.tables = {}
         self.stats_paused = False
         self.privacy = False
+        self.names = None
         self.input_buffer = ''
         self.color = self.enabled and 'NO_COLOR' not in os.environ
         try:
@@ -195,6 +196,9 @@ class Dashboard:
     def update(self, **fields):
         with self.lock:
             self.fields.update({k: clean(v) for k, v in fields.items()})
+            if self.names is None and self.fields.get('Chain') == '999':
+                from hl_names import Names
+                self.names = Names(999)
 
     def log(self, line):
         with self.lock:
@@ -256,7 +260,13 @@ class Dashboard:
 
     def display_field(self, key, value):
         public = {'Mode', 'Chain', 'Engine', 'Block (last read)', 'Round (last read)', 'Token CA', 'Miner'}
-        return '[hidden]' if self.privacy and key not in public else value
+        if self.privacy and key not in public:
+            return '[hidden]'
+        if key == 'Wallet' and self.names:
+            name = self.names.get(value)
+            if name:
+                return name + ' (' + value[:8] + '...' + value[-6:] + ')'
+        return value
 
     def feed_keys(self, text):
         # Escape sequences can be split across terminal reads; never let their
@@ -303,7 +313,12 @@ class Dashboard:
                 status = 'Privacy view enabled; execution settings unchanged.'
             tabs = ['1 Home', '2 Costs', '3 Logs', '4 Round', '5 Mine', '6 Token', '7 Total', '?']
             tabs[self.page] = '[' + tabs[self.page] + ']'
-            lines = [self.mark[0] + '  ' + self.title,
+            title = self.title
+            if not self.privacy and self.names and self.fields.get('Wallet'):
+                name = self.names.get(self.fields['Wallet'])
+                if name:
+                    title += ' | ' + (name if len(name) <= 24 else name[:21] + '...')
+            lines = [self.mark[0] + '  ' + title,
                      self.mark[1] + '  ' + self.countdown(),
                      self.mark[2] + f'  Stats: {"PAUSED" if self.stats_paused else "ON DEMAND"} | Privacy: {"ON" if self.privacy else "OFF"} | local clock',
                      '  '.join(tabs)]
@@ -336,6 +351,8 @@ class Dashboard:
                 lines += self.box('RECENT EVENTS (3: full history)', (['Log details hidden for sharing.'] if self.privacy else list(self.events)[-3:]), width, 5)
             elif self.page == 1:
                 rows = [f'{key:<22} {self.display_field(key,value)}' for key, value in self.fields.items()]
+                if self.names and 'Wallet' in self.fields:
+                    rows.insert(1, f'{"Wallet address":<22} {self.display_field("Wallet address", self.fields["Wallet"])}')
                 rows += ['Snapshots from last read. No refresh RPC.', 'Public miner budget: saved across restarts; gas extra.', 'Deploy console cap: saved; includes gas.']
                 lines += self.box('WALLET / COSTS - j/k scroll, g top', rows[self.scroll:], width, space)
             elif self.page == 2:
@@ -360,6 +377,7 @@ class Dashboard:
                     else:
                         rows += [caption, f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note]
                     if not self.privacy and self.page in self.tables:
+                        self.tables[self.page].names = self.names
                         rows += self.tables[self.page].render(width-2, space-2-len(rows), self.privacy)
                     elif not self.privacy:
                         rows += data[self.scroll:]
@@ -475,6 +493,8 @@ class Dashboard:
 
     def __exit__(self, *_):
         global _CURRENT
+        if self.names:
+            self.names.close()
         if self.insights:
             self.insights.close()
         if self.enabled:

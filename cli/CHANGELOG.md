@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Display forward-confirmed HL Names in all four miners and the shared TUI's
+  wallet view and rankings. Cache optional lookups separately from mining, hide
+  personal names in sharing view, and fall back to addresses on failure.
+
 - Automatically claim ended mining rewards at startup and on round changes in
   Python, Node.js, Go and Rust, even if a cost limit skips the next burn. Claims
   consume gas separately from the burn budget.
