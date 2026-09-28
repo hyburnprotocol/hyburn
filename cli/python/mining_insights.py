@@ -1,6 +1,8 @@
 """Optional read-only TUI snapshots. No signer, transaction methods or session writes."""
 from collections import defaultdict
 from decimal import Decimal
+import os
+from pathlib import Path
 import threading
 import time
 from web3 import Web3
@@ -65,13 +67,42 @@ def history_rows(events, timestamp, genesis, duration, limit=20):
     return rows, len(burn_ids)
 
 
+def round_records(events):
+    wallets = {}
+    for e in events:
+        if e['kind'] != BURN.lower():
+            continue
+        row = wallets.setdefault(e['account'], dict(account=e['account'], burned=0, hashes=set()))
+        row['burned'] += e['value']
+        row['hashes'].add(e['hash'])
+    total = sum(r['burned'] for r in wallets.values())
+    return [dict(account=r['account'], burned=r['burned'], txs=len(r['hashes']),
+                 share=f"{r['burned'] * 10000 // total / 100:.2f}%" if total else '0.00%')
+            for r in wallets.values()]
+
+
+def history_records(events, timestamp, genesis, duration):
+    rounds = {}
+    for e in events:
+        r = rounds.setdefault(e['round'], dict(round=e['round'], burned=0, hashes=set(), claimed=None))
+        if e['kind'] == BURN.lower():
+            r['burned'] += e['value']
+            r['hashes'].add(e['hash'])
+        else:
+            r['claimed'] = e['amount']
+    return [dict(round=r['round'], burned=r['burned'], txs=len(r['hashes']), claimed=r['claimed'],
+                 status='CLAIMED' if r['claimed'] is not None else
+                 ('OPEN' if timestamp < genesis+(r['round']+1)*duration else 'CLAIMABLE'))
+            for r in sorted(rounds.values(), key=lambda r:r['round'], reverse=True) if r['burned']][:20]
+
+
 class Paused(Exception):
     pass
 
 
 class Insights:
     """Only visible insights tabs fetch. Requests spaced >=2s; snapshots >=60s apart."""
-    def __init__(self, dashboard, rpc, chain, miner, account, genesis, duration, deploy_block, send_window=30):
+    def __init__(self, dashboard, rpc, chain, miner, account, genesis, duration, deploy_block, send_window=30, cache_dir=None):
         self.ui = dashboard
         self.w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout':8}, exception_retry_configuration=None))
         self.chain, self.miner, self.account = chain, Web3.to_checksum_address(miner), Web3.to_checksum_address(account)
@@ -80,7 +111,11 @@ class Insights:
         self.history_hash = None
         self.stop = threading.Event()
         self.last_request = 0
-        self.next_due = {3:0,4:0}
+        self.next_due = {3:0,4:0,6:0}
+        self.index = None
+        self.cache_dir = Path(cache_dir) if cache_dir else Path(os.environ.get('HYBURN_HOME', Path.home()/'.hyburn'))/'insights'
+        self.index_pending = False
+        self.last_started = {3:0,4:0,6:0}
         self.checked_chain = False
         self.round_cache = None
         self.history = {}
@@ -96,9 +131,23 @@ class Insights:
         # Reads have a bounded timeout; never hold up terminal restoration.
         self.thread.join(timeout=.1)
 
+    def refresh(self, page):
+        if page not in self.next_due:
+            return
+        if page == 6 and self.index_pending:
+            self.ui.insight_status(page, 'Initial indexing continues automatically while this tab is open')
+            return
+        # Manual input cannot shorten a scheduled cooldown or create parallel reads.
+        left = max(self.next_due[page], self.last_started[page]+60)-time.monotonic()
+        if left > 0:
+            self.ui.insight_status(page, f'Refresh available in {int(left)+1}s; rate limit preserved')
+        else:
+            self.next_due[page] = 0
+            self.ui.insight_status(page, 'Refresh queued')
+
     def request(self, page, fn):
         while True:
-            if self.stop.is_set() or self.ui.page != page:
+            if self.stop.is_set() or self.ui.page != page or self.ui.stats_paused:
                 raise Paused()
             with self.ui.lock:
                 clock = self.ui.chain_clock
@@ -161,7 +210,8 @@ class Insights:
         rows,total,wallets,txs=round_rows(events.values(),self.account)
         caption=f'Round {rid} | {wallets} wallets / {txs} txs | {units(total,18)} HYPE'
         self.ui.insight_snapshot(3, rows, caption+f' | block {block["number"]}',
-                                 note='Rank by this round\'s burns. * = you. Wallets are not people.')
+                                 note='Rank by this round\'s burns. * = you. Wallets are not people.',
+                                 records=round_records(events.values()))
 
     def history_snapshot(self, block):
         end=block['number']
@@ -214,13 +264,122 @@ class Insights:
         rows,_=history_rows(visible,block['timestamp'],self.genesis,self.duration)
         coverage='Latest 20 rounds covered' if count>20 else ('All history covered' if complete else 'Partial history; older blocks pending')
         self.ui.insight_snapshot(4,rows,f'{coverage} | block {end}',
-                                 note='Claimed HYBURN = actual claim events, not estimated allocation.')
+                                 note='Claimed HYBURN = actual claim events, not estimated allocation.',
+                                 records=history_records(visible,block['timestamp'],self.genesis,self.duration))
+
+    def total_snapshot(self, block):
+        from insight_index import EventIndex
+        page = 6
+        head = block['number']
+        if block['timestamp'] < self.genesis:
+            self.ui.insight_snapshot(page, [], 'Mining has not started.', records=[])
+            return
+        if self.index is None:
+            path = self.cache_dir / f'{self.chain}-{self.miner.lower()}.sqlite3'
+            # Existing cache knows its starting block. Otherwise locate the first
+            # possible burn by genesis timestamp, even when --deploy-block is zero.
+            start = None
+            if not path.exists():
+                lo, hi = 0, head
+                while lo < hi:
+                    self.ui.insight_status(page, 'Locating genesis block for the persistent index...')
+                    mid = (lo+hi)//2
+                    b = self.request(page, lambda:self.w3.eth.get_block(mid))
+                    if b['timestamp'] < self.genesis:
+                        lo = mid+1
+                    else:
+                        hi = mid
+                start = lo
+            self.index = EventIndex(path, dict(chain=self.chain, miner=self.miner.lower(), genesis=self.genesis), start)
+        if self.index.get('origin_ready') == '0':
+            # Persist this state so interruption during corruption recovery also
+            # resumes genesis discovery instead of scanning from block zero.
+            lo, hi = 0, head
+            while lo < hi:
+                self.ui.insight_status(page, 'Rebuilding cache: locating genesis block...')
+                mid=(lo+hi)//2
+                b=self.request(page,lambda:self.w3.eth.get_block(mid))
+                if b['timestamp'] < self.genesis: lo=mid+1
+                else: hi=mid
+            with self.index.db:
+                self.index.put('start',lo)
+                self.index.put('end',lo-1)
+                self.index.put('origin_ready',1)
+        index = self.index
+        checkpoints = index.checkpoints()
+        if checkpoints:
+            newest = checkpoints[0]
+            valid = False
+            if newest['block'] <= head:
+                check = self.request(page, lambda:self.w3.eth.get_block(newest['block']))
+                valid = Web3.to_hex(check['hash']) == newest['hash']
+            if not valid:
+                self.ui.insight_status(page, 'Chain history changed; repairing public statistics cache...')
+                ancestor = index.start-1
+                for checkpoint in checkpoints[1:]:
+                    if checkpoint['block'] > head:
+                        continue
+                    check = self.request(page, lambda:self.w3.eth.get_block(checkpoint['block']))
+                    if Web3.to_hex(check['hash']) == checkpoint['hash']:
+                        ancestor = checkpoint['block']
+                        break
+                index.rollback(ancestor)
+                if ancestor == index.start-1:
+                    with index.db:
+                        index.put('origin_ready',0)
+                    raise Paused()  # Rediscover genesis if the reorg predates all checkpoints.
+        # Show the saved state immediately, before reading any new event ranges.
+        self.publish_total(head)
+        for _ in range(5):
+            start = index.end+1
+            if start > head:
+                break
+            end = min(start+999, head)
+            self.ui.insight_status(page, f'Indexing blocks {start}-{end}; progress saved per chunk')
+            before = self.request(page, lambda:self.w3.eth.get_block(end))
+            logs = self.logs(page, start, end, [[BURN, CLAIM]])
+            after = self.request(page, lambda:self.w3.eth.get_block(end))
+            if before['hash'] != after['hash']:
+                raise ValueError('Statistics range reorganized')
+            events = []
+            for raw in logs:
+                e = decode(raw)
+                events.append(dict(tx=e['hash'], idx=e['index'], block=e['block'],
+                                   kind='burn' if e['kind']==BURN.lower() else 'claim',
+                                   round=e['round'], account=e['account'], value=e['value'], amount=e['amount']))
+            index.append(start, end, Web3.to_hex(after['hash']), events)
+            self.publish_total(head)
+        self.index_pending = index.end < head
+
+    def publish_total(self, head):
+        index = self.index
+        start, end, records = index.snapshot()
+        complete = end >= head
+        done = max(0, end-start+1)
+        span = max(1, head-start+1)
+        percent = min(100, done*100//span)
+        bar = '#'*(percent//10) + '-'*(10-percent//10)
+        caption = (f'COMPLETE through block {end}' if complete else
+                   f'PARTIAL [{bar}] {percent}% | blocks {done}/{span}')
+        total = sum(r['burned'] for r in records)
+        note = f'{len(records)} wallets | {units(total,18)} HYPE burned | claims are not balances'
+        self.ui.insight_snapshot(6, [], caption, note=note, records=records)
 
     def run(self):
+        try:
+            self._run()
+        finally:
+            if self.index:
+                self.index.close()
+
+    def _run(self):
         while not self.stop.wait(.5):
             page=self.ui.page
-            if page not in (3,4): continue
-            if time.monotonic()<self.next_due[page]: continue
+            if page not in (3,4,6) or self.ui.stats_paused:
+                continue
+            if time.monotonic()<self.next_due[page]:
+                continue
+            self.last_started[page] = time.monotonic()
             self.ui.insight_status(page,'Reading snapshot; mining remains independent')
             try:
                 if not self.checked_chain:
@@ -229,10 +388,16 @@ class Insights:
                     self.checked_chain=True
                 block=self.request(page,lambda:self.w3.eth.get_block('latest'))
                 self.ui.sync_chain(block['timestamp'], self.genesis, self.duration)
-                if page==3:self.round_snapshot(block)
-                else:self.history_snapshot(block)
+                if page==3:
+                    self.round_snapshot(block)
+                elif page==4:
+                    self.history_snapshot(block)
+                else:
+                    self.total_snapshot(block)
             except Paused:
                 continue
             except Exception:
                 self.ui.insight_status(page,'Statistics unavailable; previous snapshot retained. Retry in 60s.')
-            self.next_due[page]=time.monotonic()+60
+                self.next_due[page] = time.monotonic()+60
+                continue
+            self.next_due[page]=time.monotonic()+(2 if page==6 and self.index_pending else 60)

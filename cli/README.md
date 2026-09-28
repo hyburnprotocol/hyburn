@@ -35,8 +35,10 @@ the final reward. See [setup and saved sessions](SESSION.md).
 Default RPC in all four implementations: `https://rpc.hypurrscan.io` (third-party provider).
 Override with `--rpc` or `HYBURN_RPC`; existing explicit settings are unchanged.
 
-Python additionally provides a fixed terminal dashboard for `mine`; pass `--plain`
-before the command to disable it. Node, Go and Rust retain their countdown UI.
+All four implementations open the same terminal dashboard for interactive `mine`.
+The shared UI requires Python 3.10+; its packages are prepared automatically.
+Use `--plain` for native line output or `--yes` for unattended starts.
+The [common launcher and TUI guide](TUI.md) covers automatic builds and controls.
 
 Environment: `HYBURN_RPC`, `HYBURN_MINER`, `HYBURN_CHAIN_ID`, `HYBURN_DEPLOY_BLOCK`, `HYBURN_HOME` (profile, sessions and cache; default `~/.hyburn`).
 Key: `HYBURN_KEYSTORE` (encrypted JSON; password prompted or `HYBURN_KEYSTORE_PASSWORD`) or `HYBURN_PRIVATE_KEY`. Never as an argument.
@@ -64,8 +66,8 @@ From the repository root, build the contracts and install/build the selected min
 
 ```sh
 forge build
-python3 cli/conformance/cache_boundary.py "node cli/node/hyburn.mjs"
-cli/conformance/run.sh "node cli/node/hyburn.mjs"
+python3 cli/conformance/cache_boundary.py "node cli/node/hyburn.mjs --yes"
+cli/conformance/run.sh "node cli/node/hyburn.mjs --yes"
 ```
 
 The first command checks chain-time cache boundaries and cache migration against
@@ -73,12 +75,10 @@ mock RPC responses. The second runs burn, claim and continuous-mining scenarios
 on an isolated local Anvil chain. Test keys are public Anvil fixtures, never real
 wallet credentials. Each run owns its temporary port, cache and child processes.
 
-### Python start screen and statistics
+### Start screen and statistics
 
-The Python reference miner waits for **S: start / Q: exit** (`[y/N]` in plain
-mode). Use `hyburn.py --yes mine ...` for intentional unattended execution.
-The choice happens before signer loading and saved-transaction recovery.
-Tabs 4/5 show current-round wallet burn rankings and your recent round history;
-tab 6 distinguishes Token CA from the Miner contract. These are read-only,
-rate-spaced snapshots with coverage and age indicators, not live balances.
-See [Python dashboard details](python/README.md#terminal-dashboard).
+Every miner waits for **S: start / Q: exit** (`[y/N]` in plain mode). Unattended
+execution requires `--yes`. Tabs 4/5/7 show current-round rankings, your recent
+history and all-time participation. Tab 6 distinguishes Token CA from Miner.
+Caches are created and resumed automatically for each chain/contract. Partial
+coverage is explicitly labeled. See [the shared TUI guide](TUI.md).

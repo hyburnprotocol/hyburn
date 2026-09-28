@@ -1,8 +1,12 @@
 {
   "name": "hyburn-miner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "bin": { "hyburn": "./hyburn.mjs" },
-  "dependencies": { "ethers": "^6.15.0" }
+  "bin": {
+    "hyburn": "./hyburn.mjs"
+  },
+  "dependencies": {
+    "ethers": "^6.15.0"
+  }
 }

@@ -1,5 +1,13 @@
 # Hyburn miner (Node.js)
 
+For automatic dependency preparation/builds and the shared terminal dashboard,
+run `./cli/hyburn --engine node mine` from the repository root after
+[one-time wallet setup](../TUI.md). Python 3.10+ is required for the shared UI;
+the selected engine still performs all signing. Native commands below also open
+the TUI automatically. Press S to start or Q to exit; use `--plain` for native
+line output and `--yes` for unattended execution. Tab 7 indexes all-time rankings
+automatically with no cache configuration. [Controls and data coverage](../TUI.md).
+
 Requires Node.js 22 and npm. Start from a clone of this repository; the commands below begin
 at its root. Mining an existing contract does not require Foundry or a website build.
 

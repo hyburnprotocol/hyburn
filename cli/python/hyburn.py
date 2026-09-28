@@ -16,7 +16,7 @@ from eth_account import Account
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_RPC = "https://rpc.hypurrscan.io"
 DEFAULT_CHAIN_ID = 999
 LOG_CHUNK = 1000

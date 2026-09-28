@@ -1,4 +1,6 @@
 mod session;
+mod tui;
+use serde_json::json;
 use session::Session;
 use alloy::eips::eip2718::Encodable2718;
 use alloy::{
@@ -166,6 +168,7 @@ impl Hyburn {
         let b = self.provider.get_block_by_number(alloy::eips::BlockNumberOrTag::Latest).await?.ok_or_else(|| eyre!("no block"))?;
         self.offset = b.header.timestamp as f64 - now_unix();
         self.latest_block = b.header.number;
+        tui::event(json!({"type":"clock","timestamp":b.header.timestamp,"block":self.latest_block,"genesis":self.genesis,"duration":self.dur}));
         Ok(())
     }
     fn now(&self) -> f64 { now_unix() + self.offset }
@@ -298,6 +301,7 @@ impl Hyburn {
         Ok(())
     }
     async fn send(&self, name: &str, mut tx: TransactionRequest, value: U256, dry_run: bool) -> Result<Option<alloy::rpc::types::TransactionReceipt>> {
+        let _busy = tui::Busy::new();
         let from = self.address();
         if !dry_run {self.open_session().await?;let pending=self.provider.get_transaction_count(from).pending().await?;let latest=self.provider.get_transaction_count(from).await?;if pending!=latest {bail!("Wallet has another pending transaction; wait for it before continuing.")}}
         tx = tx.with_from(from).with_value(value).with_to(self.miner_addr);
@@ -422,6 +426,7 @@ async fn do_burn(h: &mut Hyburn, amount: U256, dry_run: bool, expected:Option<i6
 }
 
 async fn wait_local(seconds: f64, label: &str, stop: &AtomicBool) {
+    tui::event(json!({"type":"wait","seconds":seconds,"label":label}));
     log(&format!("{label}; local wait ~{seconds:.0}s, no RPC requests"));
     let duration = Duration::from_secs_f64(seconds.max(0.0));
     let start = Instant::now();
@@ -468,7 +473,9 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
     let (mut spent, mut burns, mut last_round) = (U256::ZERO, 0u64, -1i64);
     if !dry_run {let state=h.session.borrow().as_ref().unwrap().state.clone();spent=state.spent.parse()?;burns=state.burns;last_round=state.last_round;}
     let one_token = U256::from(10u64).pow(U256::from(9u64));
+    tui::event(json!({"type":"meta","chain":h.chain_id,"miner":format!("{:?}",h.miner_addr),"token":format!("{:?}",h.token.address()),"account":format!("{:?}",h.address()),"genesis":h.genesis,"duration":h.dur,"deploy":h.deploy_block,"at":at,"amount":amount.to_string(),"budget":budget.map(|b|b.to_string()).unwrap_or_default(),"reserve":h.reserve.to_string(),"dry":dry_run}));
     while !stop.load(Ordering::SeqCst) {
+        tui::event(json!({"type":"usage","spent":spent.to_string(),"burns":burns,"gas":if dry_run{"0".to_string()}else{h.session.borrow().as_ref().unwrap().state.gas.clone()}}));
         if budget.is_some_and(|b|spent+amount>b){log(&format!("budget reached ({} of {} HYPE); stopping",fmt_hype(spent,4),fmt_hype(budget.unwrap(),4)));break}
         if rounds.is_some_and(|n|burns>=n){log(&format!("done: {burns} round(s)"));break}
         h.sync_time().await?;
@@ -516,6 +523,7 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
         while final_round>=0 && !stop.load(Ordering::SeqCst){h.sync_time().await?;let left=h.round_end(final_round as u64) as f64-h.now();if left<=0.0{break}wait_local(left,"Budget complete; waiting to claim final rewards",&stop).await;}
         if !stop.load(Ordering::SeqCst){cmd_claim(h,false).await?;}
     }
+    tui::event(json!({"type":"usage","spent":spent.to_string(),"burns":burns,"gas":if dry_run{"0".to_string()}else{h.session.borrow().as_ref().unwrap().state.gas.clone()}}));
     log(&format!("mining stopped. burned {} HYPE in {burns} round(s)", fmt_hype(spent, 4)));
     Ok(())
 }
@@ -523,6 +531,8 @@ async fn cmd_mine(h: &mut Hyburn, amount: Option<String>, max_cost: Option<Strin
 #[derive(Parser)]
 #[command(name = "hyburn", version, about = "Hyburn miner (Rust)")]
 struct Cli {
+    #[arg(long, global=true)] plain: bool,
+    #[arg(long, global=true)] yes: bool,
     #[arg(long, env = "HYBURN_RPC", default_value = DEFAULT_RPC)] rpc: String,
     #[arg(long, env = "HYBURN_MINER", default_value = "")] miner: String,
     #[arg(long, env = "HYBURN_CHAIN_ID")] chain_id: Option<u64>,
@@ -554,6 +564,7 @@ async fn main() {
 async fn run() -> Result<()> {
     session::load_profile()?;
     let cli = Cli::parse();
+    if matches!(&cli.cmd,Cmd::Mine{..}){tui::route(cli.plain,cli.yes)?;}
     let mut h = Hyburn::new(&cli.rpc, &cli.miner, cli.chain_id, cli.deploy_block).await?;
     let has_key = std::env::var("HYBURN_KEYSTORE").is_ok() || std::env::var("HYBURN_PRIVATE_KEY").is_ok();
     match cli.cmd {

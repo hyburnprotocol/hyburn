@@ -1,7 +1,7 @@
 # Hyburn miner (Python, reference implementation)
 
 The reference miner uses web3.py and the bundled `terminal_ui.py` display module.
-Read `hyburn.py` before trusting it with a key. Keep both Python files together.
+Read `hyburn.py` before trusting it with a key. Keep the bundled Python modules together.
 
 ## First run
 
@@ -147,7 +147,8 @@ unique people. Leaderboard share means share of this round's burned HYPE, not a
 final reward guarantee. History distinguishes OPEN, CLAIMABLE and CLAIMED; the
 claimed amount comes from actual RewardClaimed events. Older history loads in
 bounded chunks. RPC failure preserves the previous snapshot and does not stop
-mining. These optional caches are in memory; the durable spending/transaction
+mining. Current-round and recent-history snapshots are in memory; tab 7 uses a persistent
+public-event index; the durable spending/transaction
 journal remains the source of truth for execution.
 
 ## Choose when to start
@@ -166,7 +167,10 @@ For deliberate unattended execution, opt in explicitly:
 .venv/bin/python deploy_console.py --execute --yes
 ```
 
-Redirected/noninteractive input without `--yes` stops with an explanation. This
-start choice and the multi-page TUI currently apply to the Python reference
-miner and developer console; the Node/Go/Rust clients retain their existing CLI
-execution behavior. Selecting start resumes the saved budget; it never resets it.
+Redirected/noninteractive input without `--yes` stops with an explanation. The same start choice and multi-page TUI also apply to the Node.js, Go and Rust
+miners through the common UI runtime. Selecting start resumes the saved budget; it never resets it.
+
+Tab **7** adds all-time mining participation with automatic SQLite indexing.
+Search (`/`), sorting (`o`), your-wallet filtering (`m`), history status filtering
+(`f`), privacy view (`v`) and statistics pause (`p`) are shared across all engines.
+See [the complete TUI guide](../TUI.md).

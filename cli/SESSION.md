@@ -8,12 +8,10 @@ A normal restart resumes the saved budget; it never grants a fresh budget.
 From the repository root (Python 3.10+; macOS/Linux or WSL):
 
 ```sh
-python3 -m venv cli/python/.venv
-cli/python/.venv/bin/python -m pip install -r cli/python/requirements.txt
-cli/python/.venv/bin/python cli/python/setup_miner.py
+./cli/hyburn setup
 ```
 
-Setup runs offline. Select an existing Ethereum JSON keystore or import a private
+The launcher prepares dependencies automatically. Wallet setup itself runs offline. Select an existing Ethereum JSON keystore or import a private
 key with hidden input. It saves the mainnet RPC, chain, Miner, deployment block and
 keystore **path**, not its password or private key, in `~/.hyburn/config.json`.
 All four implementations load that profile; explicit environment variables and
@@ -39,7 +37,8 @@ cli/go/hyburn mine
 cli/rust/target/release/hyburn mine
 ```
 
-Enter the keystore password at launch. Keep the computer awake and the process
+Choose S to start (Q exits), then enter the keystore password if requested.
+Unattended execution requires `--yes` before `mine`. Keep the computer awake and the process
 running. Timing, earlier-round claims and session saving are automatic. On reaching
 the budget or round limit, the miner waits for the last round to close and claims
 its remaining rewards automatically. This may take up to one round. Ctrl-C skips

@@ -3,11 +3,12 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { uiEvent, routeUI } from "./tui.mjs";
 import { promptPassword } from "./password.mjs";
 import { Session, loadProfile } from "./session.mjs";
 import { Contract, JsonRpcProvider, Wallet, parseEther, isAddress, getAddress } from "ethers";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const DEFAULT_RPC = "https://rpc.hypurrscan.io";
 const LOG_CHUNK = 1000;
 const ONE_HYPE = 10n ** 18n;
@@ -66,6 +67,7 @@ function die(m, code = 1) { console.error(m); process.exit(code); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitLocal(seconds, label, stopped) {
+  uiEvent({type:"wait",seconds,label});
   log(`${label}; local wait ~${Math.ceil(seconds)}s, no RPC requests`);
   const deadline = performance.now() + Math.max(0, seconds) * 1000;
   const recheck = performance.now() + Math.min(30, Math.max(0, seconds)) * 1000;
@@ -106,6 +108,7 @@ class Hyburn {
     const b = await this.provider.getBlock("latest");
     this.offset = Number(b.timestamp) - Date.now() / 1000;
     this.latestBlock = b.number;
+    uiEvent({type:"clock",timestamp:b.timestamp,block:b.number,genesis:Number(this.genesis),duration:Number(this.dur)});
   }
   now() { return Date.now() / 1000 + this.offset; }
   roundOf(t) { const g = Number(this.genesis), d = Number(this.dur); return t >= g ? Math.floor((t - g) / d) : -1; }
@@ -201,6 +204,11 @@ class Hyburn {
     return this.session;
   }
   async send(fnName, args, value, dryRun) {
+    uiEvent({type:"busy",value:true});
+    try { return await this.sendInner(fnName,args,value,dryRun); }
+    finally { uiEvent({type:"busy",value:false}); }
+  }
+  async sendInner(fnName, args, value, dryRun) {
     const c = this.miner.connect(this.account);
     const from = this.account.address;
     if (!dryRun) {
@@ -342,7 +350,12 @@ async function cmdMine(hb, o) {
   process.on("SIGINT", () => { stop = true; });
   log(`mining as ${hb.account.address}: ${fmtHype(amount)} HYPE per round, send ${at}s before round end`
     + (maxCost !== null ? `, max cost ${fmtHype(maxCost, 6)} HYPE/HYBURN` : "") + (budget !== null ? `, budget ${fmtHype(budget)} HYPE` : "") + (o.dryRun ? ", DRY RUN" : ""));
+  uiEvent({type:"meta",chain:hb.chainId,miner:hb.minerAddr,token:hb.token.target,account:hb.account.address,
+    genesis:Number(hb.genesis),duration:Number(hb.dur),deploy:hb.deployBlock,at,amount:amount.toString(),
+    budget:budget?.toString() ?? '',reserve:(hb.reserve ?? 0n).toString(),dry:o.dryRun});
+  const usage=()=>uiEvent({type:"usage",spent:spent.toString(),burns,gas:o.dryRun?'0':hb.session.state.gas});
   while (!stop) {
+    usage();
     if (budget !== null && spent + amount > budget) { log(`budget reached (${fmtHype(spent)} of ${fmtHype(budget)} HYPE); stopping`); break; }
     if (o.rounds && burns >= o.rounds) { log(`done: ${burns} round(s)`); break; }
     await hb.syncTime();
@@ -370,6 +383,7 @@ async function cmdMine(hb, o) {
     }
     if (!stop) await cmdClaim(hb,o);
   }
+  usage();
   log(`mining stopped. burned ${fmtHype(spent)} HYPE in ${burns} round(s)`);
 }
 
@@ -378,7 +392,8 @@ function parseArgs(argv) {
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], next = () => { if (!argv[i+1] || argv[i+1].startsWith("--")) die(`missing value for ${a}`); return argv[++i]; };
-    if (a === "--rpc") o.rpc = next(); else if (a === "--miner") o.miner = next(); else if (a === "--chain-id") o.chainId = Number(next());
+    if (a === "--plain") o.plain=true; else if (a === "--yes") o.yes=true;
+    else if (a === "--rpc") o.rpc = next(); else if (a === "--miner") o.miner = next(); else if (a === "--chain-id") o.chainId = Number(next());
     else if (a === "--deploy-block") o.deployBlock = Number(next()); else if (a === "--account") o.account = next();
     else if (a === "--amount") o.amount = next(); else if (a === "--max-cost") o.maxCost = next(); else if (a === "--at") o.at = Number(next());
     else if (a === "--new-session") o.newSession = true; else if (a === "--reserve") o.reserve = next();
@@ -391,7 +406,7 @@ function parseArgs(argv) {
   return o;
 }
 function usage() {
-  console.log(`usage: hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
+  console.log(`usage: hyburn [--plain] [--yes] [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
   status [--account ADDR]
   burn <hype> [--dry-run]
   mine [--amount HYPE] [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N]
@@ -410,6 +425,7 @@ const o = parseArgs(process.argv.slice(2));
 if (!o.cmd) { usage(); process.exit(1); }
 if (o.cmd === "burn" && !o.amount) die("burn needs an amount");
 
+await routeUI(o,process.argv.slice(2));
 const hb = new Hyburn(o.rpc, o.miner, o.chainId, o.deployBlock);
 activeMiner=hb;
 await hb.init();

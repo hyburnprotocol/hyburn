@@ -1,5 +1,31 @@
 # Miner changes
 
+## 0.3.0
+
+All four engines now use the same interactive TUI. Stop the running miner before
+updating, then run `git pull --ff-only`. The new `./cli/hyburn --engine NAME mine`
+launcher prepares packages and rebuilds changed Go/Rust sources automatically.
+Python 3.10+ is required for the shared UI, along with the chosen engine toolchain.
+
+- Mining waits for S: start / Q: exit before key loading and transaction recovery.
+  **Unattended scripts must add `--yes` before `mine`.** `--plain` keeps native
+  line output without the shared UI runtime.
+- Tab 7 adds a persistent, incremental all-time burn/round/claim ranking. Initial
+  partial coverage, saved progress, reorganization recovery and RPC cooldowns are
+  explicit. The analytics cache never replaces the spending journal.
+- Tables support search, sorting, own-wallet filtering, claim-status filtering,
+  selection and paging. A privacy view hides addresses, amounts and log details.
+- Statistics can be paused or refreshed independently of mining; refresh does not
+  bypass rate limits. Both completed snapshots and scan coverage are displayed.
+- Native engines keep their own signer and transaction implementation; the common
+  UI receives only status events. Dependency/build processes do not inherit
+  HYBURN wallet secrets.
+- Updated onboarding and the website mining guide to describe saved budgets,
+  automatic final claims and the shared launcher.
+
+Existing 0.2.0 sessions resume without migration or a budget reset. No contract
+redeployment is required. See [TUI.md](TUI.md).
+
 ## 0.2.0
 
 All four public miners now save and resume a common session. **Stop older miners

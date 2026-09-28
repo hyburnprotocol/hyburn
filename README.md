@@ -38,6 +38,29 @@ Mining the existing deployment does **not** require Foundry, a contract deployme
 or a website build. Start with Python below, or choose the [Node.js](cli/node/README.md),
 [Go](cli/go/README.md) or [Rust](cli/rust/README.md) guide.
 
+### Automatic setup and shared TUI (recommended)
+
+From the repository root, with Python 3.10+ and pip/venv:
+
+```sh
+./cli/hyburn setup
+./cli/hyburn mine --amount 0.000999 --budget 0.001998
+```
+
+The launcher prepares dependencies automatically. Connect a dedicated wallet and
+fund it for burns plus gas/reserve, then press **S** to start or **Q** to exit.
+Later, `./cli/hyburn mine` resumes the saved budget. Select a native implementation
+with `--engine node`, `--engine go` or `--engine rust`; all four use the same TUI.
+The selected language runtime/toolchain must be installed. After `git pull
+--ff-only`, the launcher rebuilds changed Go/Rust sources automatically.
+
+Tab **7** shows all-time burn rankings with automatic persistent indexing;
+**4** shows the current round and **5** your recent history. Search, sorting,
+your-wallet filtering and a privacy view are built in. See the
+[shared TUI guide](cli/TUI.md) for setup, controls and snapshot limitations.
+
+The manual setup below remains available.
+
 ### 1. Install and inspect without a wallet
 
 These commands are for macOS/Linux Bash or Zsh (Windows users can use WSL).
@@ -122,7 +145,7 @@ The following command **spends real HYPE**. It sends at most two minimum burns
 The first send normally waits until 30 seconds before the current round ends;
 the countdown can initially be almost 999 seconds. A supported terminal opens a
 dashboard. Press **S** to start mining or **Q** to exit without sending. Plain
-terminals ask `[y/N]`. Unattended Python mining requires `--yes` before `mine`.
+terminals ask `[y/N]`. Unattended mining requires `--yes` before `mine`.
 Use `hyburn.py --plain mine ...` for plain logs. Keep the computer awake.
 Ctrl-C stops the process; a transaction already broadcast may still confirm.
 
@@ -193,8 +216,8 @@ python3 verify_bytecode.py <MINER_ADDRESS> <RPC_URL>
 
 This script does not verify the Token or Vault runtime, prove their wiring, or perform a security audit. Check those contracts separately, including the token's `MINTER` address. Compiler settings must match the deployment.
 
-The Python `mine` command automatically opens a terminal dashboard on supported
-interactive terminals; use `--plain` before `mine` for line-by-line logs. All four
+All four `mine` commands automatically open the shared terminal dashboard on
+supported interactive terminals (Python 3.10+ UI runtime); use `--plain` before `mine` for line-by-line logs. All four
 miners default to `https://rpc.hypurrscan.io`. Set `HYBURN_RPC` or `--rpc` to use
 another provider. See [terminal behavior](cli/README.md#waiting-and-terminal-output).
 

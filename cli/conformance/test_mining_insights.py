@@ -2,6 +2,7 @@
 import argparse
 import sys
 import time
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -79,6 +80,48 @@ class InsightsTests(unittest.TestCase):
         m.logs.return_value=[]
         m.history_snapshot(dict(number=50,timestamp=2000,hash=b'2'))
         self.assertEqual(len(d.snapshots[4][0]),1)
+
+    def test_total_index_saves_partial_progress_and_resumes_without_rescan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d,m=self.monitor()
+            m.cache_dir=Path(directory)
+            m.logs=MagicMock(side_effect=lambda page,start,end,topics:[event()] if start<=5<=end else [])
+            block=dict(number=6000,timestamp=60000,hash=bytes([6000%256]))
+            try:
+                m.total_snapshot(block)
+                self.assertEqual(m.index.end,4999)
+                self.assertIn('PARTIAL',d.snapshots[6][1])
+                self.assertEqual(d.tables[6].records[0]['burned'],10**18)
+            finally:
+                m.index.close()
+            d,again=self.monitor()
+            again.cache_dir=Path(directory)
+            again.logs=MagicMock(return_value=[])
+            try:
+                again.total_snapshot(block)
+                self.assertEqual(again.logs.call_args_list[0].args[1],5000)
+                self.assertIn('COMPLETE',d.snapshots[6][1])
+                self.assertEqual(d.tables[6].records[0]['burned'],10**18)
+            finally:
+                again.index.close()
+
+    def test_corrupt_index_interrupted_rebuild_still_discovers_genesis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            d,m=self.monitor();m.genesis=100;m.cache_dir=Path(directory)
+            (Path(directory)/f'999-{A.lower()}.sqlite3').write_bytes(b'not a database')
+            original=m.w3.eth.get_block.side_effect
+            m.w3.eth.get_block.side_effect=stats.Paused()
+            block=dict(number=6000,timestamp=60000,hash=bytes([6000%256]))
+            try:
+                with self.assertRaises(stats.Paused):m.total_snapshot(block)
+                self.assertEqual(m.index.get('origin_ready'),'0')
+                m.w3.eth.get_block.side_effect=original
+                m.logs=MagicMock(return_value=[])
+                m.total_snapshot(block)
+                self.assertEqual(m.index.start,10)
+                self.assertEqual(m.logs.call_args_list[0].args[1],10)
+            finally:
+                m.index.close()
 
     def test_inactive_tab_never_calls_rpc(self):
         d=ui.Dashboard(False)

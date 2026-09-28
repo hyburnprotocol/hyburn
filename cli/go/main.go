@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	version    = "0.2.0"
+	version    = "0.3.0"
 	defaultRPC = "https://rpc.hypurrscan.io"
 	logChunk   = 1000
 )
@@ -238,6 +238,7 @@ func (h *Hyburn) syncTime() {
 	}
 	h.offset = float64(hdr.Time) - float64(time.Now().UnixNano())/1e9
 	h.latestBlock = hdr.Number.Uint64()
+	uiEvent(map[string]any{"type": "clock", "timestamp": hdr.Time, "block": h.latestBlock, "genesis": h.genesis, "duration": h.dur})
 }
 func (h *Hyburn) now() float64 { return float64(time.Now().UnixNano())/1e9 + h.offset }
 func (h *Hyburn) roundOf(t float64) int64 {
@@ -447,6 +448,8 @@ func (h *Hyburn) claimableIDs(acct common.Address) []*big.Int {
 }
 
 func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (*types.Receipt, error) {
+	uiEvent(map[string]any{"type": "busy", "value": true})
+	defer uiEvent(map[string]any{"type": "busy", "value": false})
 	if !dryRun {
 		h.openSession()
 		pending, e := h.client.PendingNonceAt(h.ctx, h.address)
@@ -538,6 +541,7 @@ func (h *Hyburn) send(method string, value *big.Int, dryRun bool, args ...any) (
 type opts struct {
 	rpc, miner, account, amount, maxCost, budget, reserve string
 	newSession                                            bool
+	plain, yes                                            bool
 	chainID, deployBlock, at, rounds                      int64
 	dryRun                                                bool
 	cmd                                                   string
@@ -705,6 +709,7 @@ func cmdBurn(h *Hyburn, o opts) { h.loadKey(); doBurn(h, parseHype(o.amount), o.
 
 // waitLocal performs no network requests and remains interruptible.
 func waitLocal(seconds float64, label string, stop <-chan os.Signal) bool {
+	uiEvent(map[string]any{"type": "wait", "seconds": seconds, "label": label})
 	logf("%s; local wait ~%.0fs, no RPC requests", label, seconds)
 	deadline := time.Now().Add(time.Duration(max(0, seconds) * float64(time.Second)))
 	recheck := time.Now().Add(30 * time.Second)
@@ -809,9 +814,27 @@ func cmdMine(h *Hyburn, o opts) {
 	if session != nil {
 		lastRound = session.state.LastRound
 	}
+	budgetText := ""
+	if budget != nil {
+		budgetText = budget.String()
+	}
+	reserveText := "0"
+	if h.reserve != nil {
+		reserveText = h.reserve.String()
+	}
+	uiEvent(map[string]any{"type": "meta", "chain": h.chainID.Int64(), "miner": h.minerAddr.Hex(), "token": h.tokenAddr.Hex(), "account": h.address.Hex(), "genesis": h.genesis, "duration": h.dur, "deploy": h.deployBlock, "at": o.at, "amount": amount.String(), "budget": budgetText, "reserve": reserveText, "dry": o.dryRun})
+	usage := func() {
+		gas := "0"
+		if !o.dryRun {
+			gas = h.session.state.Gas
+		}
+		uiEvent(map[string]any{"type": "usage", "spent": spent.String(), "burns": burns, "gas": gas})
+	}
+	defer usage()
 	stopped := false
 loop:
 	for !stopped {
+		usage()
 		if budget != nil && new(big.Int).Add(spent, amount).Cmp(budget) > 0 {
 			logf("budget reached (%s of %s HYPE); stopping", fmtHype(spent, 4), fmtHype(budget, 4))
 			break
@@ -894,7 +917,7 @@ loop:
 }
 
 func usage() {
-	fmt.Println(`usage: hyburn [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
+	fmt.Println(`usage: hyburn [--plain] [--yes] [--rpc URL] [--miner ADDR] [--chain-id N] [--deploy-block N] <command>
   status [--account ADDR]
   burn <hype> [--dry-run]
   mine [--amount HYPE] [--max-cost HYPE] [--at SECONDS] [--budget HYPE] [--rounds N]
@@ -934,6 +957,10 @@ func main() {
 			return args[i]
 		}
 		switch a {
+		case "--plain":
+			o.plain = true
+		case "--yes":
+			o.yes = true
 		case "--rpc":
 			o.rpc = next()
 		case "--miner":
@@ -987,6 +1014,7 @@ func main() {
 		}
 		o.amount = pos[1]
 	}
+	routeUI(o)
 	h := newHyburn(o.rpc, o.miner, o.chainID, o.deployBlock)
 	if (o.cmd == "status" || o.cmd == "history") && o.account == "" && (os.Getenv("HYBURN_KEYSTORE") != "" || os.Getenv("HYBURN_PRIVATE_KEY") != "") {
 		h.loadKey()

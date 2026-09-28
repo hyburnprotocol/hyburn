@@ -9,6 +9,7 @@ import threading
 import time
 import select
 from functools import wraps
+from insight_table import InsightTable
 try:
     import termios
     import tty
@@ -116,6 +117,10 @@ class Dashboard:
         self.insights = None
         self.snapshots = {}
         self.insight_messages = {}
+        self.tables = {}
+        self.stats_paused = False
+        self.privacy = False
+        self.input_buffer = ''
         self.color = self.enabled and 'NO_COLOR' not in os.environ
         try:
             ''.join(NETWORK_MARK).encode(getattr(self.output, 'encoding', None) or 'utf-8')
@@ -134,10 +139,13 @@ class Dashboard:
         with self.lock:
             self.insight_messages[page] = clean(message)
 
-    def insight_snapshot(self, page, rows, caption, note=''):
+    def insight_snapshot(self, page, rows, caption, note='', records=None):
         with self.lock:
             self.snapshots[page] = (list(rows), clean(caption), clean(note), time.monotonic())
-            self.insight_messages[page] = 'Snapshot ready; updates at most once per 60s'
+            self.insight_messages[page] = 'Snapshot ready; read-only statistics'
+            if records is not None:
+                table = self.tables.setdefault(page, InsightTable(page))
+                table.set_records(records, self.fields.get('Wallet', ''))
 
     def sync_chain(self, timestamp, genesis, duration):
         """Anchor the display to an existing RPC read; never fetch or send here."""
@@ -188,11 +196,26 @@ class Dashboard:
                 if self.start_choice is None:
                     self.start_choice = key.lower() == 's'
                 return
-            if key in ('1', '2', '3', '4', '5', '6', '?'):
-                self.page = {'1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '?': 6}[key]
+            table = self.tables.get(self.page)
+            if table and table.editing is not None:
+                table.handle(key)
+                return
+            if key == 'v':
+                self.privacy = not self.privacy
+                return
+            if key == 'p' and not self.awaiting_start:
+                self.stats_paused = not self.stats_paused
+                return
+            if key == 'r' and self.insights:
+                self.insights.refresh(self.page)
+                return
+            if table and table.handle(key):
+                return
+            if key in ('1', '2', '3', '4', '5', '6', '7', '?'):
+                self.page = {'1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '7': 6, '?': 7}[key]
                 self.scroll = 0
             elif key == '\t':
-                self.page = (self.page + 1) % 7
+                self.page = (self.page + 1) % 8
                 self.scroll = 0
             elif key in ('k', '\x1b[A'):
                 self.scroll = min(self.scroll + 1, max(0, len(self.events) - 1)) if self.page == 2 else max(0, self.scroll - 1)
@@ -200,6 +223,34 @@ class Dashboard:
                 self.scroll = max(0, self.scroll - 1) if self.page == 2 else min(self.scroll + 1, max(len(self.fields), len(self.snapshots.get(self.page, ([],))[0])))
             elif key == 'g':
                 self.scroll = 0
+
+    def display_field(self, key, value):
+        public = {'Mode', 'Chain', 'Phase', 'Round (last read)', 'Send window', 'Token CA', 'Miner'}
+        return '[hidden]' if self.privacy and key not in public else value
+
+    def feed_keys(self, text):
+        # Escape sequences can be split across terminal reads; never let their
+        # numeric suffix accidentally select a tab.
+        self.input_buffer += text
+        escapes = ('\x1b[A','\x1b[B','\x1b[5~','\x1b[6~','\x1b[H','\x1b[F')
+        while self.input_buffer:
+            match = next((e for e in escapes if self.input_buffer.startswith(e)), None)
+            if match:
+                self.handle_key(match)
+                self.input_buffer = self.input_buffer[len(match):]
+            elif self.input_buffer.startswith('\x1b'):
+                if any(e.startswith(self.input_buffer) for e in escapes):
+                    return
+                if self.input_buffer.startswith('\x1b['):
+                    end = re.match(r'\x1b\[[0-9;]*[A-Za-z~]', self.input_buffer)
+                    if end:
+                        self.input_buffer = self.input_buffer[end.end():]
+                        continue
+                self.handle_key('\x1b')
+                self.input_buffer = self.input_buffer[1:]
+            else:
+                self.handle_key(self.input_buffer[0])
+                self.input_buffer = self.input_buffer[1:]
 
     @staticmethod
     def box(title, rows, width, height):
@@ -218,11 +269,13 @@ class Dashboard:
             return '\n'.join(line[:width] for line in [self.title, 'Resize to at least 80 x 24.', 'Standby: S starts, Q exits.' if self.awaiting_start else 'Mining continues. Ctrl-C stops.'][:max(0, height)])
         with self.lock:
             status = self.status() if callable(self.status) else self.status
-            tabs = ['1 Home', '2 Costs', '3 Logs', '4 Wallets', '5 History', '6 Token', '? Help']
+            if self.privacy:
+                status = 'Privacy view enabled; execution settings unchanged.'
+            tabs = ['1 Home', '2 Costs', '3 Logs', '4 Round', '5 Mine', '6 Token', '7 Total', '?']
             tabs[self.page] = '[' + tabs[self.page] + ']'
             lines = [self.mark[0] + '  ' + self.title,
                      self.mark[1] + '  ' + self.countdown(),
-                     self.mark[2] + '  Local countdown / statistics are separate chain snapshots',
+                     self.mark[2] + f'  Stats: {"PAUSED" if self.stats_paused else "ON DEMAND"} | Privacy: {"ON" if self.privacy else "OFF"} | local clock',
                      '  '.join(tabs)]
             lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
             space = max(3, height - len(lines) - 1)
@@ -233,31 +286,34 @@ class Dashboard:
                     result = []
                     for key in keys:
                         if key in self.fields:
-                            result.extend([key, '  ' + self.fields[key]])
+                            result.extend([key, '  ' + self.display_field(key, self.fields[key])])
                     return result[:max(0, (panel_height - 2) // 2) * 2] or ['Waiting for first snapshot...']
                 panel_height = max(5, space - 5)
                 split = width // 2
                 left = self.box('MINING', rows(left_keys), split, panel_height)
                 right = self.box('HYPE / COSTS', rows(right_keys), width - split, panel_height)
                 lines += [a + b for a, b in zip(left, right)]
-                lines += self.box('RECENT EVENTS (3: full history)', list(self.events)[-3:], width, 5)
+                lines += self.box('RECENT EVENTS (3: full history)', (['Log details hidden for sharing.'] if self.privacy else list(self.events)[-3:]), width, 5)
             elif self.page == 1:
-                rows = [f'{key:<22} {value}' for key, value in self.fields.items()]
+                rows = [f'{key:<22} {self.display_field(key,value)}' for key, value in self.fields.items()]
                 rows += ['Snapshots from last read. No refresh RPC.', 'Public miner budget: saved across restarts; gas extra.', 'Deploy console cap: saved; includes gas.']
                 lines += self.box('WALLET / COSTS - j/k scroll, g top', rows[self.scroll:], width, space)
             elif self.page == 2:
                 end = len(self.events) - self.scroll
-                rows = list(self.events)[max(0, end - space + 2):end]
+                rows = ['Log details hidden for sharing.'] if self.privacy else list(self.events)[max(0, end - space + 2):end]
                 lines += self.box('EVENTS - k older, j newer, g latest', rows, width, space)
-            elif self.page in (3, 4):
+            elif self.page in (3, 4, 6):
                 snapshot = self.snapshots.get(self.page)
-                title = 'ROUND WALLETS / BURN LEADERBOARD' if self.page == 3 else 'MY LATEST 20 PARTICIPATION ROUNDS'
-                rows = [self.insight_messages.get(self.page, 'Statistics available after mining starts.')]
+                title = {3:'CURRENT ROUND / BURN RANK',4:'MY RECENT ROUNDS',6:'ALL-TIME / MINING PARTICIPATION'}[self.page]
+                rows = ['Statistics PAUSED (p resumes; mining is unchanged)' if self.stats_paused else self.insight_messages.get(self.page, 'Open this tab after starting to load statistics.')]
                 if snapshot:
                     data, caption, note, updated = snapshot
-                    rows += [caption, f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note]
-                    rows += data[self.scroll:]
-                lines += self.box(title + ' - j/k scroll', rows, width, space)
+                    rows += [('Values hidden for sharing.' if self.privacy and self.page != 6 else caption), f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note if not self.privacy else 'Amounts hidden for sharing.']
+                    if self.page in self.tables:
+                        rows += self.tables[self.page].render(width-2, space-2-len(rows), self.privacy)
+                    else:
+                        rows += ['Details hidden for sharing.'] if self.privacy else data[self.scroll:]
+                lines += self.box(title, rows, width, space)
             elif self.page == 5:
                 rows = ['Token CA (from the miner contract):', self.fields.get('Token CA', 'Not read yet'),
                         'Miner contract (different from the token):', self.fields.get('Miner', '--'),
@@ -266,7 +322,11 @@ class Dashboard:
                 lines += self.box('TOKEN IDENTITY', rows, width, space)
             else:
                 rows = ['1 / 2 / 3 / ? : overview, wallet & costs, events, help',
-                        '4: round wallets. 5: your history. 6: token identity.',
+                        '4: current round. 5: your history. 6: token. 7: all-time.',
+                        'Tables: / search, o sort, m your wallet, f claim status.',
+                        'c clears filters. j/k select; PgUp/PgDn move five rows.',
+                        'r requests refresh (cooldowns apply). p pauses STATISTICS.',
+                        'v privacy view: hides addresses, amounts and logs.',
                         'Tab: next page. j/k or arrows: scroll. g: reset scroll.',
                         'Ctrl-C: stop mining; already sent transactions may confirm.',
                         'Navigation never sends transactions or changes spending.',
@@ -275,7 +335,7 @@ class Dashboard:
                         'Use --plain for persistent line-by-line logs.',
                         'Keep enough native HYPE for claim gas after your final round.']
                 lines += self.box('HELP', rows, width, space)
-            lines += ['S: START   Q: EXIT   (no new submissions until start)' if self.awaiting_start else 'Tab: next  j/k: scroll  g: top  ?: help  Ctrl-C: stop']
+            lines += ['S: START   Q: EXIT   (no new submissions until start)' if self.awaiting_start else 'Tab: next  r: refresh  p: stats pause  v: privacy  ?: help  Ctrl-C: stop']
             return '\n'.join(line[:width] for line in lines[:height])
 
     def styled_frame(self, width, height):
@@ -295,7 +355,7 @@ class Dashboard:
                 code = '1;31'
             elif any(word in lower for word in ('retry', 'unavailable', 'awaiting', 'cooling')):
                 code = '33'
-            elif any(word in lower for word in ('confirmed', 'verified:')):
+            elif line.startswith('|>') or any(word in lower for word in ('confirmed', 'verified:')):
                 code = '32'
             lines.append(f'\x1b[{code}m{line}\x1b[0m')
         return '\n'.join(lines)
@@ -304,11 +364,10 @@ class Dashboard:
         while not self.done.is_set():
             if self.input_fd is not None and select.select([self.input_fd], [], [], 0)[0]:
                 keys = os.read(self.input_fd, 32).decode('utf-8', errors='ignore')
-                if keys in ('\x1b[A', '\x1b[B'):
-                    self.handle_key(keys)
-                else:
-                    for key in keys:
-                        self.handle_key(key)
+                self.feed_keys(keys)
+            elif self.input_buffer == '\x1b':
+                self.input_buffer = ''
+                self.handle_key('\x1b')
             size = shutil.get_terminal_size((80, 24))
             self.output.write('\x1b[H' + self.styled_frame(size.columns, size.lines).replace('\n', '\x1b[K\r\n') + '\x1b[K\x1b[J')
             self.output.flush()
@@ -370,5 +429,8 @@ class Dashboard:
         if self.enabled:
             self.stop()
             _CURRENT = None
-            for line in list(self.events)[-8:]:
-                print(line)
+            if self.privacy:
+                print('Stopped. Privacy view kept log details hidden.')
+            else:
+                for line in list(self.events)[-8:]:
+                    print(line)

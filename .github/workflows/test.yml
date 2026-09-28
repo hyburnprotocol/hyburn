@@ -59,11 +59,11 @@ jobs:
           - lang: python
             cmd: cli/python/.venv/bin/python cli/python/hyburn.py --yes
           - lang: node
-            cmd: node cli/node/hyburn.mjs
+            cmd: node cli/node/hyburn.mjs --yes
           - lang: go
-            cmd: cli/go/hyburn
+            cmd: cli/go/hyburn --yes
           - lang: rust
-            cmd: cli/rust/target/release/hyburn
+            cmd: cli/rust/target/release/hyburn --yes
     steps:
       - uses: actions/checkout@v6
         with:
@@ -101,6 +101,11 @@ jobs:
       - name: Deployment console regression (local Anvil only)
         if: matrix.lang == 'python'
         run: cli/python/.venv/bin/python -m unittest discover -s cli/conformance -p 'test_*.py'
+      - name: Native shared TUI smoke and telemetry
+        if: matrix.lang != 'python'
+        run: |
+          cli/python/.venv/bin/python cli/conformance/tui_native_smoke.py "${{ matrix.cmd }}"
+          cli/python/.venv/bin/python cli/conformance/tui_telemetry.py "${{ matrix.cmd }}"
       - name: Cache boundary regression
         run: python3 cli/conformance/cache_boundary.py "${{ matrix.cmd }}"
       - name: Local-chain conformance

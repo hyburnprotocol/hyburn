@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""One public entry point; prepare the selected implementation automatically."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from tui import ensure_runtime
+
+ROOT=Path(__file__).resolve().parent
+
+
+def build(command,cwd):
+    if not shutil.which(command[0]):
+        raise SystemExit(f'{command[0]} is required for this engine. Install it, or choose --engine python. No mining started.')
+    env={k:v for k,v in os.environ.items() if not k.startswith('HYBURN_')}
+    subprocess.run(command,cwd=cwd,env=env,check=True)
+
+
+def stale(target, sources):
+    return not target.exists() or any(p.stat().st_mtime>target.stat().st_mtime for p in sources if p.exists())
+
+
+def main():
+    args=sys.argv[1:]
+    engine='python'
+    if '--engine' in args:
+        pos=args.index('--engine')
+        if pos+1>=len(args):raise SystemExit('--engine needs python, node, go or rust')
+        engine=args[pos+1];del args[pos:pos+2]
+    if engine not in ('python','node','go','rust'):
+        raise SystemExit('Choose --engine python, node, go or rust')
+    if not args:args=['mine']
+    if args==['setup'] or engine=='python':
+        python=ensure_runtime()
+        command=[str(python),str(ROOT/'python/hyburn.py')]
+    elif engine=='node':
+        node=shutil.which('node')
+        if not node:raise SystemExit('Node.js 22+ is required for --engine node. No mining started.')
+        directory=ROOT/'node'
+        if stale(directory/'node_modules/.package-lock.json',[directory/'package-lock.json',directory/'package.json']):
+            print('Preparing Node.js dependencies (no wallet access)...',flush=True)
+            build(['npm','ci'],directory)
+        command=[node,str(directory/'hyburn.mjs')]
+    elif engine=='go':
+        directory=ROOT/'go';binary=directory/('hyburn.exe' if os.name=='nt' else 'hyburn')
+        if stale(binary,[*directory.glob('*.go'),directory/'go.mod',directory/'go.sum']):
+            print('Building the Go engine (no wallet access)...',flush=True)
+            build(['go','build','-o',str(binary),'.'],directory)
+        command=[str(binary)]
+    else:
+        directory=ROOT/'rust';binary=directory/'target/release'/('hyburn.exe' if os.name=='nt' else 'hyburn')
+        if stale(binary,[*(directory/'src').rglob('*.rs'),directory/'Cargo.toml',directory/'Cargo.lock']):
+            print('Building the Rust engine (no wallet access)...',flush=True)
+            build(['cargo','build','--release','--locked'],directory)
+        command=[str(binary)]
+    os.execv(command[0],[*command,*args])
+
+if __name__=='__main__':
+    try:main()
+    except KeyboardInterrupt:raise SystemExit('Cancelled. No new engine started.')
