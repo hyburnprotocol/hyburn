@@ -121,4 +121,40 @@ class TableTests(unittest.TestCase):
         view.consume(PREFIX+json.dumps(dict(type='busy',value=True)));self.assertTrue(d.signing)
         view.consume(PREFIX+json.dumps(dict(type='busy',value=False)));self.assertFalse(d.signing)
 
+    def test_privacy_keeps_public_summary_but_not_wallet_fingerprints(self):
+        d=Dashboard(False)
+        d.update(Wallet=A,Engine='rust',**{'Block (last read)':'123456','Send window':'17s private timing'})
+        table=self.table()
+        d.insight_snapshot(6,[], 'private caption '+A, note='private note',
+                           records=table.records, public_summary='COMPLETE | 2 wallets | 4 HYPE burned')
+        t=d.tables[6]
+        t.handle('m');t.query=A;t._view=None
+        d.insight_status(6,'unsafe provider error '+A)
+        d.handle_key('v');d.handle_key('7')
+        frame=d.frame(120,36)
+        for secret in (A,'YOU','Me only','private caption','private note','unsafe provider error'):
+            self.assertNotIn(secret,frame)
+        self.assertIn('2 wallets | 4 HYPE burned',frame)
+        before=(t.query,t.mine_only,t.selected)
+        d.handle_key('c');d.handle_key('m');d.handle_key('/')
+        self.assertEqual(before,(t.query,t.mine_only,t.selected))
+        self.assertIsNone(t.editing)
+        self.assertEqual(d.display_field('Engine','rust'),'rust')
+        self.assertEqual(d.display_field('Block (last read)','123456'),'123456')
+        self.assertEqual(d.display_field('Send window','17s private timing'),'[hidden]')
+        d.insight_snapshot(4,[], 'private history',records=[dict(round=42,burned=1,claimed=2,txs=3,status='CLAIMED')])
+        d.handle_key('5')
+        self.assertNotIn('42',d.frame(120,36))
+        self.assertNotIn('CLAIMED',d.frame(120,36))
+        d.handle_key('v');d.handle_key('7')
+        self.assertEqual(before,(t.query,t.mine_only,t.selected))
+
+    def test_table_privacy_does_not_expose_own_rank_share_or_filter(self):
+        t=InsightTable(3,A)
+        t.set_records([dict(account=A,burned=123,txs=7,share='100.00%')],A)
+        t.handle('m');t.editing=A
+        frame='\n'.join(t.render(100,12,True))
+        for secret in (A,'YOU','100.00%','Me only','7'):
+            self.assertNotIn(secret,frame)
+
 if __name__=='__main__':unittest.main()

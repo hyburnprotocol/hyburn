@@ -103,6 +103,8 @@ class InsightTable:
         return True
 
     def render(self, width, height, privacy=False):
+        if privacy:
+            return ['Personal wallet rows and filters hidden for sharing.'][:height]
         rows = self.view()
         if self.editing is not None:
             controls = 'Search (Enter apply / Esc cancel): ' + ('[hidden]' if privacy else self.editing) + '_'

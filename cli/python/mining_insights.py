@@ -211,7 +211,7 @@ class Insights:
         caption=f'Round {rid} | {wallets} wallets / {txs} txs | {units(total,18)} HYPE'
         self.ui.insight_snapshot(3, rows, caption+f' | block {block["number"]}',
                                  note='Rank by this round\'s burns. * = you. Wallets are not people.',
-                                 records=round_records(events.values()))
+                                 records=round_records(events.values()), public_summary=caption+f' | block {block["number"]}')
 
     def history_snapshot(self, block):
         end=block['number']
@@ -363,7 +363,8 @@ class Insights:
                    f'PARTIAL [{bar}] {percent}% | blocks {done}/{span}')
         total = sum(r['burned'] for r in records)
         note = f'{len(records)} wallets | {units(total,18)} HYPE burned | claims are not balances'
-        self.ui.insight_snapshot(6, [], caption, note=note, records=records)
+        self.ui.insight_snapshot(6, [], caption, note=note, records=records,
+                                 public_summary=caption+' | '+note)
 
     def run(self):
         try:

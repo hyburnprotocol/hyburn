@@ -7,6 +7,7 @@ import shutil
 import sys
 import threading
 import time
+import textwrap
 import select
 from functools import wraps
 from insight_table import InsightTable
@@ -99,7 +100,7 @@ class Dashboard:
         size = shutil.get_terminal_size((80, 24))
         self.enabled = enabled and os.environ.get('TERM') != 'dumb' and self.output.isatty() and self.errors.isatty() and size.columns >= 80 and size.lines >= 24
         self.title = title
-        self.fields = {}
+        self.fields = {'Engine': 'python'}
         self.events = deque(maxlen=400)
         self.page = 0
         self.scroll = 0
@@ -116,6 +117,7 @@ class Dashboard:
         self.start_choice = None
         self.insights = None
         self.snapshots = {}
+        self.public_summaries = {}
         self.insight_messages = {}
         self.tables = {}
         self.stats_paused = False
@@ -139,9 +141,10 @@ class Dashboard:
         with self.lock:
             self.insight_messages[page] = clean(message)
 
-    def insight_snapshot(self, page, rows, caption, note='', records=None):
+    def insight_snapshot(self, page, rows, caption, note='', records=None, public_summary=None):
         with self.lock:
             self.snapshots[page] = (list(rows), clean(caption), clean(note), time.monotonic())
+            self.public_summaries[page] = clean(public_summary) if public_summary is not None else ''
             self.insight_messages[page] = 'Snapshot ready; read-only statistics'
             if records is not None:
                 table = self.tables.setdefault(page, InsightTable(page))
@@ -196,7 +199,7 @@ class Dashboard:
                 if self.start_choice is None:
                     self.start_choice = key.lower() == 's'
                 return
-            table = self.tables.get(self.page)
+            table = self.tables.get(self.page) if not self.privacy else None
             if table and table.editing is not None:
                 table.handle(key)
                 return
@@ -225,7 +228,7 @@ class Dashboard:
                 self.scroll = 0
 
     def display_field(self, key, value):
-        public = {'Mode', 'Chain', 'Phase', 'Round (last read)', 'Send window', 'Token CA', 'Miner'}
+        public = {'Mode', 'Chain', 'Engine', 'Block (last read)', 'Round (last read)', 'Token CA', 'Miner'}
         return '[hidden]' if self.privacy and key not in public else value
 
     def feed_keys(self, text):
@@ -280,7 +283,7 @@ class Dashboard:
             lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
             space = max(3, height - len(lines) - 1)
             if self.page == 0:
-                left_keys = ['Mode', 'Round (last read)', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Session burns', 'Phase', 'Chain', 'Send window']
+                left_keys = ['Mode', 'Round (last read)', 'Block (last read)', 'Engine', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Session burns', 'Phase', 'Chain', 'Send window']
                 right_keys = ['Balance (snapshot)', 'Available incl. gas', 'Session burned', 'Session gas', 'Session spent', 'Burn budget', 'Burn spending']
                 def rows(keys):
                     result = []
@@ -306,13 +309,23 @@ class Dashboard:
                 snapshot = self.snapshots.get(self.page)
                 title = {3:'CURRENT ROUND / BURN RANK',4:'MY RECENT ROUNDS',6:'ALL-TIME / MINING PARTICIPATION'}[self.page]
                 rows = ['Statistics PAUSED (p resumes; mining is unchanged)' if self.stats_paused else self.insight_messages.get(self.page, 'Open this tab after starting to load statistics.')]
+                if self.privacy:
+                    rows = ['Public statistics only; personal rows and filters hidden.']
                 if snapshot:
                     data, caption, note, updated = snapshot
-                    rows += [('Values hidden for sharing.' if self.privacy and self.page != 6 else caption), f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note if not self.privacy else 'Amounts hidden for sharing.']
-                    if self.page in self.tables:
-                        rows += self.tables[self.page].render(width-2, space-2-len(rows), self.privacy)
+                    if self.privacy:
+                        if self.page == 4:
+                            rows = ['Personal round history hidden for sharing.']
+                        else:
+                            rows += textwrap.wrap(self.public_summaries.get(self.page) or 'Public summary not available yet.', width=max(1,width-2))
+                            rows += [f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)',
+                                     'Wallets are not people. No personal wallet markers shown.']
                     else:
-                        rows += ['Details hidden for sharing.'] if self.privacy else data[self.scroll:]
+                        rows += [caption, f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note]
+                    if not self.privacy and self.page in self.tables:
+                        rows += self.tables[self.page].render(width-2, space-2-len(rows), self.privacy)
+                    elif not self.privacy:
+                        rows += data[self.scroll:]
                 lines += self.box(title, rows, width, space)
             elif self.page == 5:
                 rows = ['Token CA (from the miner contract):', self.fields.get('Token CA', 'Not read yet'),
@@ -326,7 +339,8 @@ class Dashboard:
                         'Tables: / search, o sort, m your wallet, f claim status.',
                         'c clears filters. j/k select; PgUp/PgDn move five rows.',
                         'r requests refresh (cooldowns apply). p pauses STATISTICS.',
-                        'v privacy view: hides addresses, amounts and logs.',
+                        'v privacy: public totals only; hides personal rows/logs.',
+                        'Privacy does not hide window titles or shell scrollback.',
                         'Tab: next page. j/k or arrows: scroll. g: reset scroll.',
                         'Ctrl-C: stop mining; already sent transactions may confirm.',
                         'Navigation never sends transactions or changes spending.',

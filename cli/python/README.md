@@ -173,4 +173,13 @@ miners through the common UI runtime. Selecting start resumes the saved budget; 
 Tab **7** adds all-time mining participation with automatic SQLite indexing.
 Search (`/`), sorting (`o`), your-wallet filtering (`m`), history status filtering
 (`f`), privacy view (`v`) and statistics pause (`p`) are shared across all engines.
+
+For screenshots, press `v` and confirm `Privacy: ON`. Privacy view keeps the
+round clock, chain, block, engine, official contract addresses and public aggregate
+statistics visible. It hides personal wallet rows, ranks, shares, history, filters,
+balances, budgets, send timing and raw logs. Filters are preserved but cannot be
+edited until privacy is disabled. This is display masking, not on-chain anonymity:
+small participant counts can still allow inference from public chain data. Crop
+screenshots to the TUI itself; window titles, shell history, setup/password prompts
+and output outside the TUI are not covered. Plain CLI output is not privacy-masked.
 See [the complete TUI guide](../TUI.md).

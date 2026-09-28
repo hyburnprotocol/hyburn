@@ -69,7 +69,15 @@ the table. Abbreviated addresses in rows are only a display convenience.
 - `c`: clear search and filters.
 - `r`: request a refresh without bypassing RPC cooldowns.
 - `p`: pause/resume **statistics only**. Mining keeps running.
-- `v`: privacy view, hiding wallet addresses, displayed amounts and log details.
+- `v`: sharing view. Keeps public round/chain information, contract addresses and
+  aggregate statistics. Hides personal wallet rows, ranks, shares, history, filters,
+  amounts, spending settings and raw logs. Personal filters are preserved but
+  inactive for display/input until privacy is disabled.
+
+Privacy masks the TUI, not the blockchain or your terminal window. Small public
+participation counts may still allow inference. Crop screenshots to the TUI;
+window titles, previous shell output, setup prompts and `--plain` logs are outside
+this protection. Never share a private key, password or authenticated RPC URL.
   This is presentation masking, not deletion or anonymization of on-chain data.
 - Ctrl-C: stop mining. Submitted transactions may confirm after exit.
 
