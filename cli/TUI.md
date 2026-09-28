@@ -10,6 +10,9 @@ The developer deployment console uses the same display and statistics modules.
 From a clone of the repository on macOS/Linux or WSL, with Python 3.10+ and
 pip/venv available:
 
+For installation and wallet preparation from scratch, see the
+[beginner walkthrough](GETTING_STARTED.md).
+
 ```sh
 ./cli/hyburn setup
 ./cli/hyburn mine --amount 0.000999 --budget 0.001998

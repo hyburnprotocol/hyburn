@@ -40,10 +40,26 @@ or a website build. Start with Python below, or choose the [Node.js](cli/node/RE
 
 ### Automatic setup and shared TUI (recommended)
 
-From the repository root, with Python 3.10+ and pip/venv:
+New to terminals? Follow the [step-by-step beginner guide](cli/GETTING_STARTED.md).
+No contract deployment is needed.
+
+On macOS/Linux or Windows WSL, first check `git --version` and
+`python3 --version` (Python 3.10+ with pip/venv). If either command is unavailable,
+install that prerequisite before continuing. Then copy these commands one line
+at a time into your terminal:
 
 ```sh
+git clone https://github.com/hyburnprotocol/hyburn.git
+cd hyburn
 ./cli/hyburn setup
+```
+
+Setup prints your mining address. Check it against your dedicated wallet and fund
+it with **native HYPE on HyperEVM (chain 999)**. The next example burns at most
+0.001998 HYPE; you also need transaction gas and the default 0.001 HYPE reserve.
+Do not fund only the burn budget. Then, from the same terminal/folder:
+
+```sh
 ./cli/hyburn mine --amount 0.000999 --budget 0.001998
 ```
 

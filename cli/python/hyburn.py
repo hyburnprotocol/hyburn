@@ -522,6 +522,7 @@ def main() -> None:
     p.add_argument("--deploy-block", type=int, default=int(os.environ.get("HYBURN_DEPLOY_BLOCK", 0)), help="block of the deployment; log scans start here")
     p.add_argument("--version", action="version", version=VERSION)
     sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser('setup', help='connect a dedicated wallet offline; run ./cli/hyburn setup')
 
     s = sub.add_parser("status", help="current round and protocol state")
     s.add_argument("--account", help="show this account's position (default: your key's address if set)")
@@ -552,7 +553,14 @@ def main() -> None:
     s.set_defaults(fn=cmd_history, needs_key=False)
 
     args = p.parse_args()
+    if args.cmd == 'setup':
+        setup(); return
     with terminal_ui.Dashboard(enabled=args.cmd == "mine" and not args.plain) as dashboard:
+        if args.cmd == 'mine':
+            terminal_ui.preview_start(dashboard,sys.argv[1:])
+            if not terminal_ui.choose_start(args.yes):
+                print('Mining not started. No new transactions sent.')
+                return
         with dashboard.activity('Connecting to RPC and verifying chain parameters'):
             hb = Hyburn(args.rpc, args.miner, args.chain_id, args.deploy_block)
         if args.cmd in ("status", "history") and not args.account and (os.environ.get("HYBURN_KEYSTORE") or os.environ.get("HYBURN_PRIVATE_KEY")):
@@ -561,9 +569,6 @@ def main() -> None:
             raise SystemExit("history needs --account or a key")
         if args.cmd == 'mine':
             dashboard.update(Miner=hb.miner_addr, Chain=hb.chain_id, **{'Token CA': hb.token.address})
-            if not terminal_ui.choose_start(args.yes):
-                print('Mining not started. No new transactions sent.')
-                return
         args.fn(hb, args)
 
 if __name__ == "__main__":

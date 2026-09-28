@@ -88,6 +88,7 @@ def run_engine(command, args, engine):
     rpc=option(args,'--rpc',os.environ.get('HYBURN_RPC','https://rpc.hypurrscan.io'))
     with terminal_ui.Dashboard(title=f'HYBURN / {engine.upper()} MINER') as ui:
         ui.update(Engine=engine,Mode='STANDBY - no transactions sent')
+        terminal_ui.preview_start(ui,args)
         if not terminal_ui.choose_start('--yes' in args):
             print('Mining not started. No new transactions sent.')
             return 0

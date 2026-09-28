@@ -243,6 +243,20 @@ class SetupProfileTests(unittest.TestCase):
                 setup_miner.main()
                 self.assertEqual(profile.read_text(), contents)
 
+    def test_setup_invalid_key_explains_recovery_without_exposing_input(self):
+        import setup_miner
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(console.os.environ, {'HYBURN_HOME':directory}), \
+             patch.object(setup_miner.sys.stdin,'isatty',return_value=True), \
+             patch('builtins.input',return_value=''), \
+             patch.object(setup_miner.getpass,'getpass',side_effect=['PRIVATE_SENTINEL','test-password-123','test-password-123']):
+            with self.assertRaises(SystemExit) as result:
+                setup_miner.main()
+            self.assertIn('32-byte hex private key',str(result.exception))
+            self.assertNotIn('PRIVATE_SENTINEL',str(result.exception))
+            self.assertFalse((Path(directory)/'config.json').exists())
+
+
     def test_explicit_key_and_rpc_override_saved_profile(self):
         import setup_miner
         with tempfile.TemporaryDirectory() as temp:

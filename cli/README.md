@@ -13,6 +13,8 @@ Start with the [mainnet quickstart](../README.md#mine-on-hyperevm) and
 [wallet guide](WALLET.md). No browser-wallet connection or contract deployment
 is needed for ordinary mining.
 
+New to command-line tools? Use the [beginner walkthrough](GETTING_STARTED.md).
+
 ## Interface (shared commands)
 
 ```text

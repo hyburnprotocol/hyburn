@@ -69,9 +69,30 @@ def choose_start(auto_start=False, label='Start mining'):
     context = ui.suspended() if ui else __import__('contextlib').nullcontext()
     with context:
         try:
+            if ui:
+                for key in ('Requested burn', 'Requested budget', 'Requested reserve', 'Session action'):
+                    if key in ui.fields:
+                        print(f'{key}: {ui.fields[key]}')
+            print('Burns are irreversible. Gas is extra. Resume keeps the saved budget.')
             return input(label + '? [y/N] ').strip().lower() in ('y', 'yes')
         except EOFError:
             return False
+
+
+def preview_start(ui, args):
+    """Display requested options without loading a key, session or RPC."""
+    def option(name, fallback):
+        for i, value in enumerate(args):
+            if value.startswith(name+'='):
+                return value.split('=',1)[1]
+            if value == name and i+1 < len(args):
+                return args[i+1]
+        return fallback
+    ui.update(**{'Mode': 'STANDBY - no transactions sent',
+                 'Requested burn': option('--amount', 'Saved value (required on first run)'),
+                 'Requested budget': option('--budget', 'Saved value / --rounds limit'),
+                 'Requested reserve': option('--reserve', 'Saved value / default 0.001 HYPE'),
+                 'Session action': 'NEW budget requested' if '--new-session' in args else 'Resume saved budget, or create first session'})
 
 
 class LogStream:
@@ -283,6 +304,16 @@ class Dashboard:
             lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
             space = max(3, height - len(lines) - 1)
             if self.page == 0:
+                if self.awaiting_start:
+                    rows = ['Burns are irreversible. Transaction gas is extra.',
+                            'Requested HYPE settings; validated after unlocking.',
+                            *[f'{key}: {self.display_field(key,self.fields[key])}' for key in
+                              ('Requested burn','Requested budget','Requested reserve','Session action') if key in self.fields],
+                            'First burn normally waits until 30s before round end.',
+                            'S: continue and unlock wallet. Q: exit without mining.']
+                    lines += self.box('BEFORE YOU START', rows, width, space)
+                    lines += ['S: START   Q: EXIT   (no new submissions until start)']
+                    return '\n'.join(line[:width] for line in lines[:height])
                 left_keys = ['Mode', 'Round (last read)', 'Block (last read)', 'Engine', 'Burn / transaction', 'Burn / round', 'Confirmed burns', 'Session burns', 'Phase', 'Chain', 'Send window']
                 right_keys = ['Balance (snapshot)', 'Available incl. gas', 'Session burned', 'Session gas', 'Session spent', 'Burn budget', 'Burn spending']
                 def rows(keys):

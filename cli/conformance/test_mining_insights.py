@@ -176,9 +176,22 @@ class StartTests(unittest.TestCase):
     def test_decline_public_precedes_key_and_session_recovery(self):
         hb=MagicMock()
         with patch.object(sys,'argv',['hyburn','mine']), patch('setup_miner.load_profile'), \
-             patch.object(hyburn,'Hyburn',return_value=hb), patch.object(ui,'choose_start',return_value=False):
+             patch.object(hyburn,'Hyburn',return_value=hb) as connection, patch.object(ui,'choose_start',return_value=False):
             hyburn.main()
+        connection.assert_not_called()
         hb.load_key.assert_not_called(); hb.open_session.assert_not_called()
+
+    def test_start_preview_is_explicit_and_privacy_safe(self):
+        d=ui.Dashboard(False)
+        ui.preview_start(d,['mine','--amount','0.000999','--budget=0.001998','--new-session'])
+        d.awaiting_start=True
+        frame=d.frame(100,30)
+        self.assertIn('0.000999',frame)
+        self.assertIn('0.001998',frame)
+        self.assertIn('NEW budget requested',frame)
+        self.assertIn('Transaction gas is extra',frame)
+        d.privacy=True
+        self.assertNotIn('0.001998',d.frame(100,30))
 
     def test_decline_developer_precedes_signing_and_settle(self):
         c=deploy_console.Console.__new__(deploy_console.Console)
