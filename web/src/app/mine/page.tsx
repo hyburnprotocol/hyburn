@@ -9,9 +9,10 @@ export default function MinePage() {
       <header className="hb-document-header hb-raised">
         <p className="hb-eyebrow">Hyburn / Mine</p>
         <h1 id="mining-guide-title">Mining guide</h1>
-        <p>Four mining engines. One terminal dashboard.</p>
+        <p>Your first mining session, step by step.</p>
       </header>
       <p>Run an open-source miner to burn HYPE and claim HYBURN on HyperEVM. This website does not connect to your wallet. Your chosen engine signs locally.</p>
+      <p>Start with Python below. You do not need the other engines, Foundry, a contract deployment or a website build. Prefer a guide beside your terminal? Open the <a href={`${CONFIG.repo}/blob/main/cli/GETTING_STARTED.md`} target="_blank" rel="noopener noreferrer">beginner walkthrough</a>.</p>
       <Panel title="Before you start">
         <ul className="mb-0">
           <li>Use a dedicated wallet funded for your intended burns, transaction gas and the protected reserve. Burned HYPE does not come back.</li>
@@ -19,15 +20,44 @@ export default function MinePage() {
           <li>Each burn specifies its round. A late transaction reverts the burn but still spends gas.</li>
         </ul>
       </Panel>
-      <h2>1. Get the source</h2>
-      <p>Use Git and Python 3.10+ with pip/venv on macOS, Linux or WSL. Review the source before connecting a wallet.</p>
+      <h2>1. Prepare your terminal</h2>
+      <p>Use Terminal on macOS, a Linux terminal, or a Windows WSL terminal. These commands are not for native PowerShell. Copy one line at a time and press Enter.</p>
+      <pre><code>{`git --version\npython3 --version\npython3 -m pip --version`}</code></pre>
+      <p>You need Git and Python 3.10+ with pip/venv. If a command is missing, use the official <a href="https://git-scm.com/downloads/" target="_blank" rel="noopener noreferrer">Git</a>, <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer">Python</a> or <a href="https://learn.microsoft.com/en-us/windows/wsl/install" target="_blank" rel="noopener noreferrer">WSL</a> installation guide, then reopen your terminal. Windows users need Git and Python inside WSL.</p>
+      <h2>2. Download the miner</h2>
       <p>Source: <a href={CONFIG.repo} target="_blank" rel="noopener noreferrer">{CONFIG.repo}</a>.</p>
       <pre><code>{`git clone ${CONFIG.repo}.git\ncd hyburn`}</code></pre>
-      <h2>2. Connect your wallet once</h2>
+      <p>Already downloaded it? Enter your existing hyburn folder instead. Keep all following commands in this folder, which contains README.md and cli/.</p>
+      <h2>3. Set up a dedicated wallet</h2>
       <pre><code>./cli/hyburn setup</code></pre>
       <p>The launcher prepares its packages automatically. Wallet setup then runs offline: import a private key with hidden input, or choose an encrypted Ethereum JSON keystore. The shared connection profile stores the keystore path, not its password or private key. Never pass a private key as a command-line argument.</p>
-      <p>Fund the verified wallet address with native HYPE. The default protected reserve is 0.001 HYPE; burns and gas need additional funds.</p>
-      <h2>3. Choose an engine</h2>
+      <ol>
+        <li>At <code>Keystore path</code>, enter an existing Ethereum JSON keystore path, or press Enter to import your dedicated account&apos;s private key.</li>
+        <li>Use your wallet&apos;s own interface to export that account&apos;s key. Do not enter a seed phrase. Hidden input shows no characters or dots; type or paste, then press Enter.</li>
+        <li>For a new keystore, choose a password of at least 12 characters and repeat it. This encrypts the local file; it need not match your browser-wallet password.</li>
+        <li>Check the printed address against your wallet. Back up the encrypted file and password separately. Setup does not send funds or overwrite existing settings.</li>
+      </ol>
+      <p>There is no browser-wallet popup. An address alone cannot sign, and hardware-wallet signing is not supported. Never enter a private key on this website or send it in a support message.</p>
+      <h2>4. Fund and check</h2>
+      <p>Fund the verified address with <strong>native HYPE on HyperEVM (chain 999)</strong>. HYPE held only on HyperCore, WHYPE and HYBURN cannot pay native gas here.</p>
+      <Panel title="Example funding requirements">
+        <p>Two burns × 0.000999 HYPE = <strong>0.001998 HYPE burn budget</strong>.</p>
+        <p className="mb-0">Add variable transaction gas and the default <strong>0.001 HYPE protected reserve</strong>. Funding only the burn budget is not enough. The miner checks affordability before sending; gas is not a fixed amount.</p>
+      </Panel>
+      <p>For a read-only balance check without unlocking, copy the <code>status --account</code> command printed by setup; it already includes your public address.</p>
+      <h3>Optional simulation — no transaction sent</h3>
+      <pre><code>./cli/hyburn burn 0.000999 --dry-run</code></pre>
+      <p>Enter the keystore password when asked. Simulation needs enough HYPE for the estimated transaction. Keep <code>--dry-run</code>: removing it sends a real burn. A successful simulation does not reserve a reward or guarantee inclusion.</p>
+      <h2>5. Start mining — spends real HYPE</h2>
+      <pre><code>./cli/hyburn mine --amount 0.000999 --budget 0.001998</code></pre>
+      <p>This example authorizes at most two minimum burns, plus gas. Read the requested settings, then press <strong>S</strong> to continue or <strong>Q</strong> to cancel. In a small/plain terminal, enter y at <code>[y/N]</code> to continue; Enter alone cancels. Unlock your keystore when prompted.</p>
+      <p>The first burn normally waits until 30 seconds before the round ends. A countdown near 999 seconds is normal. It is a local estimate; LIVE means execution mode, not a confirmed transaction. Keep the terminal open and computer awake.</p>
+      <p>On reaching the saved limit, the miner waits for its final round to end and automatically claims its remaining rewards. Let that finish. If HYBURN is not visible in your wallet, use the official Token CA on tab 6 to import it; the Miner address is different.</p>
+      <h2>6. Stop and resume</h2>
+      <p>Press Ctrl-C to stop. Previously submitted transactions can still confirm. In a new terminal, enter the same project folder, then run:</p>
+      <pre><code>{`./cli/hyburn mine`}</code></pre>
+      <p>A restart resumes the same budget; it does not reset spending. Depositing more HYPE does not increase that budget. To authorize a new budget, use <code>mine --new-session</code> with your full intended settings. Run one engine at a time for a wallet.</p>
+      <h2>Optional: choose another engine</h2>
       <p>Stay in the repository root. All four engines use the same dashboard, saved budget and public-event cache. The launcher installs packages and builds missing or changed engines; the selected runtime/toolchain must already be installed.</p>
       <div className="hb-language-guides">
         {[
@@ -41,17 +71,12 @@ export default function MinePage() {
             <div className="hb-language-body">
               <p>{language.needs}</p>
               <pre><code>{`./cli/hyburn --engine ${language.engine} mine --amount 0.000999 --budget 0.001998`}</code></pre>
-              <p>This example authorizes at most two minimum burns, with gas additional. Press S to start. Later, use the same command with just <code>mine</code> to resume the saved settings.</p>
+              <p>This example authorizes at most two minimum burns, with gas additional. Press S to start. To switch engines, stop the previous process first. Resume with the command below.</p>
+              <pre><code>{`./cli/hyburn --engine ${language.engine} mine`}</code></pre>
             </div>
           </details>
         ))}
       </div>
-      <h2>4. Check, start and resume</h2>
-      <p>Check the deployment and simulate a burn before sending. Simulation needs an unlocked wallet and enough HYPE for the estimated transaction.</p>
-      <pre><code>{`./cli/hyburn status\n./cli/hyburn burn 0.000999 --dry-run\n./cli/hyburn mine --amount 0.000999 --budget 0.001998`}</code></pre>
-      <p>The first burn normally waits until 30 seconds before the round ends. The countdown runs locally. Keep the computer awake. On reaching the saved limit, the miner waits for its final round to end and automatically claims its remaining rewards.</p>
-      <pre><code>{`./cli/hyburn mine`}</code></pre>
-      <p>A restart resumes the same budget; it does not reset spending. Depositing more HYPE does not increase that budget. To authorize a new budget, use <code>mine --new-session</code> with your full intended settings. Run one engine at a time for a wallet.</p>
       <h2>Explore the dashboard</h2>
       <table>
         <thead><tr><th>Key</th><th>View</th></tr></thead>
@@ -64,6 +89,7 @@ export default function MinePage() {
         </tbody>
       </table>
       <p>Use / to search, o to sort, m to filter to your wallet, f to filter claim status, and v for privacy view. The p key pauses statistics only, not mining. Ctrl-C stops the engine.</p>
+      <p>For screenshots, turn on Privacy with v. Public round information and aggregate statistics stay visible; personal wallet rows, ranks, shares, history, filters, amounts and raw logs are hidden. Crop to the TUI: window titles, previous shell output and plain logs are not protected. Small participant counts can still allow inference from public chain data.</p>
       <p>The all-time cache is created and resumed automatically. Initial coverage is marked PARTIAL; COMPLETE is always through a stated block. Rankings count wallets, not people. Claimed rewards are not token balances. Statistics use limited background reads only while their page is open.</p>
       <h2>Options</h2>
       <table>
@@ -80,8 +106,25 @@ export default function MinePage() {
       </table>
       <h2>Updates and manual claims</h2>
       <p>Run <code>git pull --ff-only</code> while the miner is stopped. The next launcher run prepares changed dependencies or builds. Your saved budget and statistics remain separate from the source checkout.</p>
-      <pre><code>{`./cli/hyburn claim\n./cli/hyburn history`}</code></pre>
+      <pre><code>{`git pull --ff-only\n./cli/hyburn mine`}</code></pre>
+      <p>If Git reports conflicts or local changes, inspect them before continuing; do not blindly reset or delete wallet files. Setup is not needed again.</p>
+      <p>Read your participation history:</p>
+      <pre><code>./cli/hyburn history</code></pre>
+      <p>Manually claim finished rewards (sends transactions and costs gas):</p>
+      <pre><code>./cli/hyburn claim</code></pre>
       <p>There is no claim deadline. You can also call <code>burn(expectedRoundId)</code> or <code>claimMany(roundIds, account)</code> directly on the Miner contract. Claims always pay the named account.</p>
+      <h2>If something goes wrong</h2>
+      <table>
+        <thead><tr><th>Situation</th><th>Next step</th></tr></thead>
+        <tbody>
+          <tr><td>Command not found</td><td>Check Git/Python installation and enter the downloaded hyburn folder.</td></tr>
+          <tr><td>Cannot unlock keystore</td><td>Check the file and its password. Do not delete the keystore or share the key.</td></tr>
+          <tr><td>Insufficient balance</td><td>Check native HYPE on HyperEVM, including gas and the protected reserve.</td></tr>
+          <tr><td>RPC retry or connection failure</td><td>Wait for retries. If the process stops, resume with the same command; do not reset the budget.</td></tr>
+          <tr><td>Wallet already in use</td><td>Stop the other miner using that wallet.</td></tr>
+          <tr><td>Budget reached</td><td>Normal completion. Wait for the final reward claim; restarting does not grant a new budget.</td></tr>
+        </tbody>
+      </table>
     </section>
   );
 }
