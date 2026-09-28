@@ -37,9 +37,13 @@ match these facts; production builds fail on missing or mismatched values.
 `NEXT_PUBLIC_COMMIT` identifies the deployed contract source, not the latest web
 commit. Do not replace it with the current GitHub Actions SHA.
 
-The pipeline pulls production settings, builds once with `vercel build --prod`,
-and publishes the same output with `vercel deploy --prebuilt --prod`. A failed
-build or test leaves the previous production deployment serving traffic.
+After CI, the pipeline uses `vercel deploy --yes --prod` to build the production
+site on Vercel with its registered environment. Production validation runs inside
+that build. CLI 59.16.0's `vercel pull` queries team metadata unavailable to a
+project-only token, so this pipeline intentionally avoids `pull` and local Vercel
+builds rather than expanding the credential scope. CI's generic build and the
+production build are separate. A failed build or test leaves the previous
+production deployment serving traffic.
 
 After deployment, check `/`, `/mine/`, `/whitepaper/` and the displayed Token,
 Miner and Vault addresses. Use Vercel's previous successful deployment to roll

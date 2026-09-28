@@ -181,12 +181,6 @@ jobs:
         run: test -n "$VERCEL_TOKEN" && test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
       - name: Install pinned deployment CLI
         run: npm install --global vercel@59.16.0
-      - name: Load production project configuration
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-      - name: Build validated production artifact
-        env:
-          HYBURN_PRODUCTION: '1'
-        run: vercel build --prod --token="$VERCEL_TOKEN"
       - name: Publish only if website inputs are still current
         run: |
           git fetch --no-tags origin main
@@ -194,4 +188,7 @@ jobs:
             echo 'Newer website inputs exist; skipping obsolete deployment.'
             exit 0
           fi
-          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          # `pull` queries team settings unavailable to project-only tokens.
+          # Direct deploy supports project-only tokens and builds on Vercel
+          # using this project's validated production environment.
+          vercel deploy --yes --prod --token="$VERCEL_TOKEN"
