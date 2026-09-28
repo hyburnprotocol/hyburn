@@ -16,7 +16,7 @@ from eth_account import Account
 from web3 import Web3
 
 ROOT = Path(__file__).resolve().parents[2]
-COMMANDS = [ ['cli/python/.venv/bin/python','cli/python/hyburn.py'], ['node','cli/node/hyburn.mjs'], ['cli/go/hyburn'], ['cli/rust/target/release/hyburn'] ]
+COMMANDS = [ ['cli/python/.venv/bin/python','cli/python/hyburn.py','--yes'], ['node','cli/node/hyburn.mjs'], ['cli/go/hyburn'], ['cli/rust/target/release/hyburn'] ]
 import sys
 if len(sys.argv)>1:
     COMMANDS=[shlex.split(sys.argv[1])]

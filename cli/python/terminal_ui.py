@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import select
+from functools import wraps
 try:
     import termios
     import tty
@@ -28,6 +29,47 @@ def current():
 def clean(text):
     text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', str(text))
     return ''.join(c for c in text if c.isprintable())
+
+
+def transaction_activity(fn):
+    """Keep optional statistics idle while preparing/submitting a transaction."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        ui = current()
+        if ui:
+            ui.signing = True
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            if ui:
+                ui.signing = False
+    return wrapped
+
+
+def choose_start(auto_start=False, label='Start mining'):
+    """No signing, recovery or submission before this explicit choice."""
+    if auto_start:
+        return True
+    ui = current()
+    if ui and ui.input_fd is not None:
+        ui.start_choice = None
+        ui.awaiting_start = True
+        ui.update(Mode='STANDBY - no transactions sent')
+        ui.log(label + '? S: start / Q: exit. Existing transactions may still confirm.')
+        try:
+            while ui.start_choice is None:
+                time.sleep(.1)
+            return ui.start_choice
+        finally:
+            ui.awaiting_start = False
+    if not sys.stdin.isatty():
+        raise SystemExit('Start choice requires a terminal. Use --yes for intentional unattended execution.')
+    context = ui.suspended() if ui else __import__('contextlib').nullcontext()
+    with context:
+        try:
+            return input(label + '? [y/N] ').strip().lower() in ('y', 'yes')
+        except EOFError:
+            return False
 
 
 class LogStream:
@@ -68,12 +110,34 @@ class Dashboard:
         self.done = threading.Event()
         self.worker = None
         self.chain_clock = None
+        self.signing = False
+        self.awaiting_start = False
+        self.start_choice = None
+        self.insights = None
+        self.snapshots = {}
+        self.insight_messages = {}
         self.color = self.enabled and 'NO_COLOR' not in os.environ
         try:
             ''.join(NETWORK_MARK).encode(getattr(self.output, 'encoding', None) or 'utf-8')
             self.mark = NETWORK_MARK
         except (UnicodeEncodeError, LookupError):
             self.mark = ('              ', '  HyperEVM    ', '              ')
+
+    def attach_insights(self, **kwargs):
+        if not self.enabled or self.insights:
+            return
+        from mining_insights import Insights
+        self.insights = Insights(self, **kwargs)
+        self.insights.start()
+
+    def insight_status(self, page, message):
+        with self.lock:
+            self.insight_messages[page] = clean(message)
+
+    def insight_snapshot(self, page, rows, caption, note=''):
+        with self.lock:
+            self.snapshots[page] = (list(rows), clean(caption), clean(note), time.monotonic())
+            self.insight_messages[page] = 'Snapshot ready; updates at most once per 60s'
 
     def sync_chain(self, timestamp, genesis, duration):
         """Anchor the display to an existing RPC read; never fetch or send here."""
@@ -118,18 +182,22 @@ class Dashboard:
                 self.status = previous
 
     def handle_key(self, key):
-        # Navigation only. Keys never sign, send, claim, or change the burn budget.
+        # Start keys only release the main-thread gate; navigation stays read-only.
         with self.lock:
-            if key in ('1', '2', '3', '?'):
-                self.page = {'1': 0, '2': 1, '3': 2, '?': 3}[key]
+            if self.awaiting_start and key.lower() in ('s', 'q'):
+                if self.start_choice is None:
+                    self.start_choice = key.lower() == 's'
+                return
+            if key in ('1', '2', '3', '4', '5', '6', '?'):
+                self.page = {'1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '?': 6}[key]
                 self.scroll = 0
             elif key == '\t':
-                self.page = (self.page + 1) % 4
+                self.page = (self.page + 1) % 7
                 self.scroll = 0
             elif key in ('k', '\x1b[A'):
                 self.scroll = min(self.scroll + 1, max(0, len(self.events) - 1)) if self.page == 2 else max(0, self.scroll - 1)
             elif key in ('j', '\x1b[B'):
-                self.scroll = max(0, self.scroll - 1) if self.page == 2 else min(self.scroll + 1, len(self.fields))
+                self.scroll = max(0, self.scroll - 1) if self.page == 2 else min(self.scroll + 1, max(len(self.fields), len(self.snapshots.get(self.page, ([],))[0])))
             elif key == 'g':
                 self.scroll = 0
 
@@ -147,14 +215,14 @@ class Dashboard:
     def frame(self, width, height):
         width = max(1, width - 1)
         if width < 79 or height < 24:
-            return '\n'.join(line[:width] for line in [self.title, 'Resize to at least 80 x 24.', 'Mining continues. Ctrl-C stops.'][:max(0, height)])
+            return '\n'.join(line[:width] for line in [self.title, 'Resize to at least 80 x 24.', 'Standby: S starts, Q exits.' if self.awaiting_start else 'Mining continues. Ctrl-C stops.'][:max(0, height)])
         with self.lock:
             status = self.status() if callable(self.status) else self.status
-            tabs = ['1 Overview', '2 Wallet / costs', '3 Events', '? Help']
+            tabs = ['1 Home', '2 Costs', '3 Logs', '4 Wallets', '5 History', '6 Token', '? Help']
             tabs[self.page] = '[' + tabs[self.page] + ']'
             lines = [self.mark[0] + '  ' + self.title,
                      self.mark[1] + '  ' + self.countdown(),
-                     self.mark[2] + '  HyperEVM / local display; no extra RPC requests',
+                     self.mark[2] + '  Local countdown / statistics are separate chain snapshots',
                      '  '.join(tabs)]
             lines += self.box('ACTIVITY', [f"{'|/-'[int(time.monotonic() * 4) % 3]} {clean(status)}"], width, 3)
             space = max(3, height - len(lines) - 1)
@@ -181,8 +249,24 @@ class Dashboard:
                 end = len(self.events) - self.scroll
                 rows = list(self.events)[max(0, end - space + 2):end]
                 lines += self.box('EVENTS - k older, j newer, g latest', rows, width, space)
+            elif self.page in (3, 4):
+                snapshot = self.snapshots.get(self.page)
+                title = 'ROUND WALLETS / BURN LEADERBOARD' if self.page == 3 else 'MY LATEST 20 PARTICIPATION ROUNDS'
+                rows = [self.insight_messages.get(self.page, 'Statistics available after mining starts.')]
+                if snapshot:
+                    data, caption, note, updated = snapshot
+                    rows += [caption, f'Updated {int(time.monotonic()-updated)}s ago (snapshot, not live)', note]
+                    rows += data[self.scroll:]
+                lines += self.box(title + ' - j/k scroll', rows, width, space)
+            elif self.page == 5:
+                rows = ['Token CA (from the miner contract):', self.fields.get('Token CA', 'Not read yet'),
+                        'Miner contract (different from the token):', self.fields.get('Miner', '--'),
+                        'Chain: ' + self.fields.get('Chain', '--'),
+                        'Verify the address on this chain, not just the name.']
+                lines += self.box('TOKEN IDENTITY', rows, width, space)
             else:
                 rows = ['1 / 2 / 3 / ? : overview, wallet & costs, events, help',
+                        '4: round wallets. 5: your history. 6: token identity.',
                         'Tab: next page. j/k or arrows: scroll. g: reset scroll.',
                         'Ctrl-C: stop mining; already sent transactions may confirm.',
                         'Navigation never sends transactions or changes spending.',
@@ -191,7 +275,7 @@ class Dashboard:
                         'Use --plain for persistent line-by-line logs.',
                         'Keep enough native HYPE for claim gas after your final round.']
                 lines += self.box('HELP', rows, width, space)
-            lines += ['1 Overview  2 Wallet  3 Events  ? Help  Tab Next  Ctrl-C Stop']
+            lines += ['S: START   Q: EXIT   (no new submissions until start)' if self.awaiting_start else 'Tab: next  j/k: scroll  g: top  ?: help  Ctrl-C: stop']
             return '\n'.join(line[:width] for line in lines[:height])
 
     def styled_frame(self, width, height):
@@ -281,6 +365,8 @@ class Dashboard:
 
     def __exit__(self, *_):
         global _CURRENT
+        if self.insights:
+            self.insights.close()
         if self.enabled:
             self.stop()
             _CURRENT = None

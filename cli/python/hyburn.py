@@ -260,6 +260,7 @@ class Hyburn:
             self.session.recover(self.w3)
         return self.session
 
+    @terminal_ui.transaction_activity
     def send(self, fn, value: int = 0, dry_run: bool = False) -> dict | None:
         acct = self.account
         if not dry_run:
@@ -436,6 +437,10 @@ def cmd_mine(hb: Hyburn, args) -> None:
             dashboard.update(**{'Protected reserve': f'{fmt_hype(hb.reserve, 9)} HYPE',
                                 'Session gas': f'{fmt_hype(int(hb.session.state["gas"]), 9)} HYPE',
                                 'Session file': hb.session.path})
+    if dashboard:
+        dashboard.attach_insights(rpc=args.rpc, chain=hb.chain_id, miner=hb.miner_addr,
+                                  account=hb.account.address, genesis=hb.genesis, duration=hb.dur,
+                                  deploy_block=hb.deploy_block, send_window=args.at)
     last_round = hb.session.state['last_round'] if not args.dry_run else -1
     while not stop["flag"]:
         if budget is not None and spent + amount > budget:
@@ -509,6 +514,7 @@ def main() -> None:
         setup(); return
     load_profile()
     p = argparse.ArgumentParser(prog="hyburn", description="Hyburn miner (reference implementation)")
+    p.add_argument("--yes", action="store_true", help="start mining without the interactive start choice")
     p.add_argument("--plain", action="store_true", help="disable the interactive mining dashboard")
     p.add_argument("--rpc", default=os.environ.get("HYBURN_RPC", DEFAULT_RPC))
     p.add_argument("--miner", default=os.environ.get("HYBURN_MINER", ""), help="HyburnMiner contract address")
@@ -553,6 +559,11 @@ def main() -> None:
             hb.load_key()
         if args.cmd == "history" and not args.account and not hb.account:
             raise SystemExit("history needs --account or a key")
+        if args.cmd == 'mine':
+            dashboard.update(Miner=hb.miner_addr, Chain=hb.chain_id, **{'Token CA': hb.token.address})
+            if not terminal_ui.choose_start(args.yes):
+                print('Mining not started. No new transactions sent.')
+                return
         args.fn(hb, args)
 
 if __name__ == "__main__":

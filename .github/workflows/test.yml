@@ -57,7 +57,7 @@ jobs:
       matrix:
         include:
           - lang: python
-            cmd: cli/python/.venv/bin/python cli/python/hyburn.py
+            cmd: cli/python/.venv/bin/python cli/python/hyburn.py --yes
           - lang: node
             cmd: node cli/node/hyburn.mjs
           - lang: go
@@ -100,7 +100,7 @@ jobs:
       - run: forge build
       - name: Deployment console regression (local Anvil only)
         if: matrix.lang == 'python'
-        run: cli/python/.venv/bin/python cli/conformance/test_deploy_console.py
+        run: cli/python/.venv/bin/python -m unittest discover -s cli/conformance -p 'test_*.py'
       - name: Cache boundary regression
         run: python3 cli/conformance/cache_boundary.py "${{ matrix.cmd }}"
       - name: Local-chain conformance

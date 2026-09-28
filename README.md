@@ -121,7 +121,9 @@ The following command **spends real HYPE**. It sends at most two minimum burns
 
 The first send normally waits until 30 seconds before the current round ends;
 the countdown can initially be almost 999 seconds. A supported terminal opens a
-dashboard. Use `hyburn.py --plain mine ...` for plain logs. Keep the computer awake.
+dashboard. Press **S** to start mining or **Q** to exit without sending. Plain
+terminals ask `[y/N]`. Unattended Python mining requires `--yes` before `mine`.
+Use `hyburn.py --plain mine ...` for plain logs. Keep the computer awake.
 Ctrl-C stops the process; a transaction already broadcast may still confirm.
 
 `--budget` counts **burns across restarts**; gas is additional. Settings and
@@ -239,8 +241,8 @@ example uses Python; replace the quoted command to test another implementation:
 
 ```sh
 forge build
-python3 cli/conformance/cache_boundary.py "cli/python/.venv/bin/python cli/python/hyburn.py"
-cli/conformance/run.sh "cli/python/.venv/bin/python cli/python/hyburn.py"
+python3 cli/conformance/cache_boundary.py "cli/python/.venv/bin/python cli/python/hyburn.py --yes"
+cli/conformance/run.sh "cli/python/.venv/bin/python cli/python/hyburn.py --yes"
 ```
 
 The boundary regression uses a local mock RPC. The conformance scenario launches

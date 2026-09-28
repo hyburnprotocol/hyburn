@@ -72,3 +72,13 @@ The first command checks chain-time cache boundaries and cache migration against
 mock RPC responses. The second runs burn, claim and continuous-mining scenarios
 on an isolated local Anvil chain. Test keys are public Anvil fixtures, never real
 wallet credentials. Each run owns its temporary port, cache and child processes.
+
+### Python start screen and statistics
+
+The Python reference miner waits for **S: start / Q: exit** (`[y/N]` in plain
+mode). Use `hyburn.py --yes mine ...` for intentional unattended execution.
+The choice happens before signer loading and saved-transaction recovery.
+Tabs 4/5 show current-round wallet burn rankings and your recent round history;
+tab 6 distinguishes Token CA from the Miner contract. These are read-only,
+rate-spaced snapshots with coverage and age indicators, not live balances.
+See [Python dashboard details](python/README.md#terminal-dashboard).

@@ -121,7 +121,8 @@ and red errors. Set `NO_COLOR=1` for monochrome or use `--plain` for line logs.
 `hyburn.py mine` and `deploy_console.py` automatically show a fixed dashboard in
 interactive terminals at least 80 columns by 24 rows. It separates saved metrics,
 current activity/countdown and recent events. Press `1` for Overview, `2` for
-Wallet/Costs, `3` for Events, `?` for Help, or Tab to cycle. Use `j`/`k` to scroll
+Wallet/Costs, `3` for Events, `4` for current-round wallets ranked by burned HYPE,
+`5` for your latest 20 participation rounds, `6` for Token CA, `?` for Help, or Tab to cycle. Use `j`/`k` to scroll
 and `g` to reset; these keys never send transactions or change budgets. Screen refreshes perform no RPC
 requests. Balances and round data are snapshots from the last read, not live feeds.
 
@@ -134,4 +135,38 @@ console's saved cap includes deployment and transaction gas.
 The default RPC is the third-party Hypurrscan endpoint. `--rpc` overrides it;
 `HYBURN_RPC` also overrides it in the standard miner, while the deployment console
 uses its local JSON configuration. Existing explicit settings are preserved.
-Provider availability and limits may differ; the dashboard does not change them.
+Provider availability and limits may differ. Optional statistics use a separate
+read-only worker only while tab 4 or 5 is visible, spacing requests by at least
+two seconds and completed snapshots by at least 60 seconds. New statistics requests pause near the
+mining send window and during transaction preparation/submission; an already
+in-flight read may finish. Other processes
+and the miner itself still share the provider/IP allowance.
+
+Statistics display their block, age and scan coverage. Unique wallets are not
+unique people. Leaderboard share means share of this round's burned HYPE, not a
+final reward guarantee. History distinguishes OPEN, CLAIMABLE and CLAIMED; the
+claimed amount comes from actual RewardClaimed events. Older history loads in
+bounded chunks. RPC failure preserves the previous snapshot and does not stop
+mining. These optional caches are in memory; the durable spending/transaction
+journal remains the source of truth for execution.
+
+## Choose when to start
+
+Opening `hyburn.py mine` or `deploy_console.py --execute` no longer starts
+transactions immediately. In the dashboard press **S** to start or **Q** to exit.
+Plain or small terminals ask `[y/N]`, defaulting to no. The choice precedes loading
+the signer and recovering/rebroadcasting saved transactions. Transactions sent
+in an earlier run may still confirm on chain while this process is waiting.
+The start screen may read chain data, but does not send transactions.
+
+For deliberate unattended execution, opt in explicitly:
+
+```sh
+.venv/bin/python hyburn.py --yes mine
+.venv/bin/python deploy_console.py --execute --yes
+```
+
+Redirected/noninteractive input without `--yes` stops with an explanation. This
+start choice and the multi-page TUI currently apply to the Python reference
+miner and developer console; the Node/Go/Rust clients retain their existing CLI
+execution behavior. Selecting start resumes the saved budget; it never resets it.

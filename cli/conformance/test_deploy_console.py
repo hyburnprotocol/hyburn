@@ -339,6 +339,7 @@ class ChainTest(unittest.TestCase):
                 args2 = argparse.Namespace(**vars(args))
                 args2.state = str(Path(temp)/'automated.json')
                 args2.execute = True
+                args2.yes = True
                 args2.keystore = None
                 args2.reserve = '0.001'
                 c.wallet_lease.close()  # The same wallet cannot run two consoles.

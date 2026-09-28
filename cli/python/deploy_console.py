@@ -349,6 +349,7 @@ class Console:
         if self.state.get('halted'):
             raise RuntimeError(self.state['halted'])
 
+    @terminal_ui.transaction_activity
     def send(self, fn, kind, value=0, rid=None, claims=None):
         try:
             tx = self.prepare(fn, value)
@@ -432,6 +433,12 @@ class Console:
                 print(f"Deployment maximum gas cost: {hype(tx['gas'] * tx['maxFeePerGas'])} HYPE")
             print('No transaction sent. Fill private_key in the local JSON, then use --execute.')
             return
+        label = 'Resume mining' if self.state and self.state.get('miner') else 'Deploy contracts and start mining'
+        if not terminal_ui.choose_start(getattr(self.args, 'yes', False), label):
+            print('Execution cancelled. No new transactions sent.')
+            return
+        if terminal_ui.current():
+            terminal_ui.current().update(Mode="LIVE")
         ensure_config_untracked()
         self.account = load_signer(self.address, self.args.keystore)
         if not self.state:
@@ -445,7 +452,7 @@ class Console:
         if self.state.get('halted'):
             raise RuntimeError(self.state['halted'])
         self.screen('READY')
-        # --execute explicitly authorizes this run; no additional password/prompt for raw JSON keys.
+        # The start choice above precedes signing and pending-transaction recovery.
         if not self.state.get('miner'):
             if not self.send(self.factory.constructor(), 'deploy'):
                 return
@@ -471,6 +478,13 @@ class Console:
                 print(f'Local website build did not finish: {error}. Facts saved; mining will continue.', flush=True)
         else:
             print('Resuming mining; local website update/build skipped.', flush=True)
+        dashboard = terminal_ui.current()
+        if dashboard:
+            dashboard.update(**{'Token CA': token_address})
+            dashboard.attach_insights(rpc=self.args.rpc, chain=self.args.chain_id,
+                                      miner=self.state['miner'], account=self.address,
+                                      genesis=genesis, duration=999, deploy_block=self.state['deploy_block'],
+                                      send_window=0)
         claim_candidates = self.unclaimed_rounds(miner)
         while True:
             now = self.w3.eth.get_block('latest')['timestamp']
@@ -520,6 +534,7 @@ def main():
     p.add_argument('--reserve', default=str(config.get('reserve_hype', '0.001')), help='HYPE left untouched; fixed on first execution')
     p.add_argument('--keystore', help='Optional encrypted keystore instead of private_key in local JSON')
     p.add_argument('--plain', action='store_true', help='Disable the interactive terminal dashboard')
+    p.add_argument('--yes', action='store_true', help='Skip the start choice for intentional unattended execution')
     p.add_argument('--execute', action='store_true')
     p.add_argument('--refresh-website', action='store_true', help='With --execute, refresh local website facts and build on resume; never publishes')
     args = p.parse_args()
