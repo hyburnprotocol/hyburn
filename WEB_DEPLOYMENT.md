@@ -9,9 +9,16 @@ Turborepo is not required: the single Next.js app lives in `web/`.
 `.github/workflows/test.yml` publishes trusted pushes to `main` only after the
 contracts, website and all four mining implementations pass. Fork pull requests
 run tests but never receive the production environment or deployment token.
-Production jobs are serialized, and a commit that is no longer main is skipped
-before publication. A push arriving during publication is deployed by its own
-subsequent successful run.
+Production jobs are serialized. Before publication, the job checks that its web
+and deployment inputs still match main; newer website inputs skip the old build.
+A later CLI-only commit does not suppress a pending website deployment. A web
+push arriving during publication is deployed by its own subsequent successful run.
+
+Production deployment is additionally restricted to pushes that change `web/`
+or `.github/workflows/test.yml` (the website's CI/deployment configuration).
+The comparison covers the complete push, including multiple commits, deletions
+and moves. CLI-only, contract-only and general documentation pushes still run
+CI but do not publish the website. A new branch's first push is treated as changed.
 
 GitHub environment `production` holds a project-scoped `VERCEL_TOKEN` secret and
 the `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID` variables. Restrict this environment to
