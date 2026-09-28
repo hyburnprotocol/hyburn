@@ -23,8 +23,8 @@ class HubTests(unittest.TestCase):
         with patch.object(sys.stdin,'isatty',return_value=False),patch.object(hub.subprocess,'run') as run:
             with self.assertRaises(SystemExit): hub.main()
         run.assert_not_called()
-    def test_private_menu_absent_in_public_checkout(self):
-        with patch.object(sys.stdin,'isatty',return_value=True),patch.object(sys.stdout,'isatty',return_value=True),patch('builtins.input',side_effect=['9','q']),patch.object(hub,'local_liquidity',return_value=None),patch.object(hub.subprocess,'run') as run,patch.object(hub,'banner') as banner:
+    def test_retired_menu_does_not_launch_a_child(self):
+        with patch.object(sys.stdin,'isatty',return_value=True),patch.object(sys.stdout,'isatty',return_value=True),patch('builtins.input',side_effect=['9','q']),patch.object(hub.subprocess,'run') as run,patch.object(hub,'banner') as banner:
             hub.main()
         run.assert_not_called()
         self.assertFalse(any('Legacy local liquidity' in line for call in banner.call_args_list for line in call.args[1]))

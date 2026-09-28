@@ -87,7 +87,8 @@ operation permits a fresh preview; it never undoes or repeats completed steps.
 Use `./hyburn liquidity revoke` to preview clearing remaining token approvals,
 then add `--execute` only after review. Pending or unknown hashes cannot be closed. Position discovery is bounded to 500 NFTs; specify an ID for larger wallets.
 
-The legacy developer manager remains Git-ignored and is not part of this module.
+The legacy developer liquidity scripts were retired. Historical pool-creation
+records remain local and Git-ignored; this module does not depend on them.
 
 Before signing, the tool checks the entire batch gas ceiling and native balance.
 Each transaction is still checked again because network fees can change. Quotes

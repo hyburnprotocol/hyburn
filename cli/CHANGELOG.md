@@ -9,7 +9,8 @@
   reconcile confirmed transactions, review partial operations and revoke approvals.
 - Add the website liquidity guide and repository onboarding/recovery instructions.
 - Liquidity-change previews require Anvil. Normal mining and read-only pool views
-  do not. The legacy developer liquidity tools remain local and Git-ignored.
+  do not. The legacy developer liquidity tools were removed; creation records remain
+  local and Git-ignored.
 
 ## 0.3.0
 

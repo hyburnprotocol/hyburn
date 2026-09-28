@@ -138,11 +138,8 @@ HYBURN/WHYPE 0.3% pool and links to Project X. Choose **7 — My liquidity** to 
 liquidity wizard. See [liquidity management](LIQUIDITY.md). Creating a position
 does not create a different pool. Pool balances are not active depth or a trade quote.
 
-A developer checkout may contain an optional, Git-ignored
-`script/liquidity/console.py`. Only when that file exists does the hub show its
-legacy local liquidity manager at option 9. This extension has separate wallet, position and
-spending settings. It is not shipped to public users and does not inherit mining
-permissions or budgets. No key is loaded just by opening either menu.
+The public liquidity menu is the single supported liquidity interface. Historical
+pool-creation records remain local and are not required by this menu.
 
 If the ignored local developer configuration exists, the hub also exposes a
 separate developer mining console entry. This resumes its own configuration and
